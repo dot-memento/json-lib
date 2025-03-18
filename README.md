@@ -21,10 +21,14 @@ Include the header in your project:
 #include "json.h"
 ```
 
-Parse JSON from a file:
+Parse JSON from a file (or stdin):
 
 ```c
-json_entry *root = json_parse_file("data.json");
+// ...
+// Get a FILE pointer: stdin, fopen, etc.
+// ...
+
+json_entry *root = json_parse_file(file);
 if (root == NULL) {
     // Handle error...
 }
