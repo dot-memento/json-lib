@@ -52,7 +52,7 @@
 
 TEST(parse_simple_object) {
     const char *json_str = "{ \"name\": \"John\", \"age\": 30 }";
-    json_entry *obj = json_parse_string((char *)json_str);
+    json_entry *obj = json_parse_string(json_str);
     
     ASSERT(obj != NULL);
     ASSERT(json_get_type(obj) == JSON_OBJECT);
@@ -72,13 +72,13 @@ TEST(parse_simple_object) {
 
 TEST(parse_simple_array) {
     const char *json_str = "[1, 2, 3, 4, 5]";
-    json_entry *arr = json_parse_string((char *)json_str);
+    json_entry *arr = json_parse_string(json_str);
     
     ASSERT(arr != NULL);
     ASSERT(json_get_type(arr) == JSON_ARRAY);
     ASSERT(json_array_count(arr) == 5);
     
-    for (int i = 0; i < 5; i++) {
+    for (size_t i = 0; i < 5; i++) {
         json_entry *item = json_array_get(arr, i);
         ASSERT(item != NULL);
         ASSERT(json_get_type(item) == JSON_NUMBER);
@@ -104,7 +104,7 @@ TEST(parse_nested_structures) {
         "  ]"
         "}";
     
-    json_entry *obj = json_parse_string((char *)json_str);
+    json_entry *obj = json_parse_string(json_str);
     
     ASSERT(obj != NULL);
     ASSERT(json_get_type(obj) == JSON_OBJECT);
@@ -148,7 +148,7 @@ TEST(parse_all_types) {
         "  \"emptyArray\": []"
         "}";
     
-    json_entry *obj = json_parse_string((char *)json_str);
+    json_entry *obj = json_parse_string(json_str);
     
     ASSERT(obj != NULL);
     ASSERT(json_get_type(obj) == JSON_OBJECT);
@@ -210,7 +210,7 @@ TEST(accessor_functions) {
         "  \"array\": [1, 2, 3]"
         "}";
     
-    json_entry *obj = json_parse_string((char *)json_str);
+    json_entry *obj = json_parse_string(json_str);
     ASSERT(obj != NULL);
     
     // Test try functions with correct types
@@ -400,11 +400,11 @@ TEST(type_conversion) {
 
 TEST(empty_input) {
     // Empty string
-    json_entry *result = json_parse_string((char *)"");
+    json_entry *result = json_parse_string("");
     ASSERT(result == NULL);
     
     // Only whitespace
-    result = json_parse_string((char *)"   \n\t  ");
+    result = json_parse_string("   \n\t  ");
     ASSERT(result == NULL);
 }
 

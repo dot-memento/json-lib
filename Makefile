@@ -1,6 +1,15 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -pedantic -g
-LDFLAGS =
+CFLAGS = -std=c11 -pedantic -Og -g\
+	-Wall -Wextra\
+	-Wcast-align\
+	-Wcast-qual\
+	-Wformat -Wformat=2\
+	-Wimplicit-fallthrough\
+	-Wincompatible-pointer-types\
+	-Wpointer-arith\
+	-Wshadow\
+	-Wwrite-strings
+LDFLAGS = -flto
 
 # Source and object directories
 SRC_DIR = src

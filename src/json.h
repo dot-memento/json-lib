@@ -36,20 +36,36 @@ typedef enum json_type {
 
 
 /**
- * @brief Parses a JSON file and returns the root entry.
- * @param file The file to parse.
- * @return A pointer to the root @c json_entry, or @c NULL if parsing fails.
- * @note The returned @c json_entry must be freed using @c json_free().
+ * @brief Creates a new empty JSON entry.
+ * @return A pointer to a newly allocated @c json_entry, or @c NULL if memory allocation fails.
+ * @note The caller is responsible for freeing the entry using @c json_free()
+ *       or by freeing a parent entry.
  */
-json_entry* json_parse_file(FILE *file);
+json_entry* json_new_null();
 
 /**
- * @brief Parses a JSON string and returns the root entry.
- * @param string The JSON string.
- * @return A pointer to the root @c json_entry, or @c NULL if parsing fails.
- * @note The returned @c json_entry must be freed using @c json_free().
+ * @brief Creates a new numerical JSON entry.
+ * @return A pointer to a newly allocated @c json_entry, or @c NULL if memory allocation fails.
+ * @note The caller is responsible for freeing the entry using @c json_free()
+ *       or by freeing a parent entry.
  */
-json_entry* json_parse_string(char *string);
+json_entry* json_new_number(double value);
+
+/**
+ * @brief Creates a new boolean JSON entry.
+ * @return A pointer to a newly allocated @c json_entry, or @c NULL if memory allocation fails.
+ * @note The caller is responsible for freeing the entry using @c json_free()
+ *       or by freeing a parent entry.
+ */
+json_entry* json_new_bool(bool value);
+
+/**
+ * @brief Creates a new string JSON entry.
+ * @return A pointer to a newly allocated @c json_entry, or @c NULL if memory allocation fails.
+ * @note The caller is responsible for freeing the entry using @c json_free()
+ *       or by freeing a parent entry.
+ */
+json_entry* json_new_string(char *value);
 
 /**
  * @brief Frees a JSON entry and all its children.
@@ -146,15 +162,6 @@ bool json_get_bool_safe(const json_entry *entry, bool *value);
  * @return The json_type of the entry.
  */
 json_type json_get_type(const json_entry *entry);
-
-
-/**
- * @brief Creates a new, empty JSON entry.
- * @return A pointer to a newly allocated @c json_entry, or @c NULL if memory allocation fails.
- * @note The caller is responsible for freeing the entry using @c json_free()
- *       or by freeing a parent entry.
- */
-json_entry* json_new_null();
 
 
 /**
@@ -258,12 +265,74 @@ void json_set_array(json_entry *entry);
 
 
 /**
- * @brief Writes a JSON entry to a file in a pretty-printed format.
+ * @brief Options for JSON printing.
+ */
+typedef struct json_print_options {
+    size_t indent; /**< The number of spaces to indent each level (0 for compact). */
+    void (*error_callback)(const char *message, void *user_data);
+    void *user_data;
+} json_print_options;
+
+/**
+ * @brief Writes a JSON entry to a file.
  * @param file The file to print to.
  * @param entry The JSON entry to print.
- * @param indent The number of spaces to indent each level (0 for compact).
+ * @param options Printing options.
  * @return @c true on success, @c false on failure (e.g., if the entry is invalid or if writing fails).
  */
-bool json_write_to_file(FILE *file, const json_entry *entry, size_t indent);
+bool json_write_to_file(FILE *file, const json_entry *entry, const json_print_options *options);
+
+/**
+ * @brief Writes a JSON entry to a string.
+ * @param[out] dst Output parameter that receives the JSON string.
+ * @param entry The JSON entry to print.
+ * @param options Printing options.
+ * @return @c true on success, @c false on failure (e.g., if the entry is invalid or if memory allocation fails).
+ * @note The caller is responsible for freeing the returned string using @c free().
+ */
+bool json_write_to_string(char **dst, const json_entry *entry, const json_print_options *options);
+
+/**
+ * @brief Options for JSON parsing.
+ */
+typedef struct json_parse_options {
+    void (*error_callback)(size_t line, size_t column, const char *message, void *user_data);
+    void *user_data;
+} json_parse_options;
+
+/**
+ * @brief Parses a JSON file and returns the root entry.
+ * @param file The file to parse.
+ * @return A pointer to the root @c json_entry, or @c NULL if parsing fails.
+ * @note The returned @c json_entry must be freed using @c json_free().
+ */
+json_entry* json_parse_file(FILE *file);
+
+/**
+ * @brief Parses a JSON file with error reporting.
+ * @param file The file to parse.
+ * @param options Parsing options.
+ * @return A pointer to the root @c json_entry, or @c NULL if parsing fails.
+ * @note The returned @c json_entry must be freed using @c json_free().
+ */
+json_entry* json_parse_file_ex(FILE *file, const json_parse_options *options);
+
+/**
+ * @brief Parses a JSON string and returns the root entry.
+ * @param string The JSON string.
+ * @return A pointer to the root @c json_entry, or @c NULL if parsing fails.
+ * @note The returned @c json_entry must be freed using @c json_free().
+ */
+json_entry* json_parse_string(const char *string);
+
+/**
+ * @brief Parses a JSON string with error reporting.
+ * @param string The JSON string.
+ * @param options Parsing options.
+ * @return A pointer to the root @c json_entry, or @c NULL if parsing fails.
+ * @note The returned @c json_entry must be freed using @c json_free().
+*/
+json_entry* json_parse_string_ex(const char *string, const json_parse_options *options);
+
 
 #endif // JSON_H
