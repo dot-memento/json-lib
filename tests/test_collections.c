@@ -108,6 +108,31 @@ void test_array_set()
     json_free(array);
 }
 
+void test_array_clone()
+{
+    json_value *array, *item;
+    json_number_create(42.5, &item);
+    json_array_create(&array);
+    json_array_append(array, item);
+
+    json_value *clone;
+    json_error error = json_clone(array, &clone);
+
+    ASSERT_JSON_SUCCESS("Clone array", error);
+    ASSERT_JSON_TYPE("Cloned value has correct type", clone, JSON_ARRAY);
+    ASSERT_JSON_ARRAY_LENGTH("Cloned array has correct length", clone, 1);
+
+    json_value *cloned_item;
+    error = json_array_get(clone, 0, &cloned_item);
+
+    ASSERT_JSON_SUCCESS("Get item from cloned array", error);
+    ASSERT_JSON_GET_NUMBER("Cloned item has correct value", cloned_item, 42.5);
+    ASSERT_NOT_EQUAL_PTR("Cloned item is not the same as the original", item, cloned_item);
+
+    json_free(array);
+    json_free(clone);
+}
+
 void test_array_remove()
 {
     json_value *first_item, *second_item, *array;
@@ -265,6 +290,31 @@ void test_object_has_key()
     json_free(object);
 }
 
+void test_object_clone()
+{
+    json_value *object, *item;
+    json_number_create(42.5, &item);
+    json_object_create(&object);
+    json_object_set(object, "first", item);
+
+    json_value *clone;
+    json_error error = json_clone(object, &clone);
+
+    ASSERT_JSON_SUCCESS("Clone object", error);
+    ASSERT_JSON_TYPE("Cloned value has correct type", clone, JSON_OBJECT);
+    ASSERT_JSON_OBJECT_SIZE("Cloned object has correct size", clone, 1);
+
+    json_value *cloned_item;
+    error = json_object_get(clone, "first", &cloned_item);
+
+    ASSERT_JSON_SUCCESS("Get item from cloned object", error);
+    ASSERT_JSON_GET_NUMBER("Cloned item has correct value", cloned_item, 42.5);
+    ASSERT_NOT_EQUAL_PTR("Cloned item is not the same as the original", item, cloned_item);
+
+    json_free(object);
+    json_free(clone);
+}
+
 void test_object_remove()
 {
     json_value *first_item, *second_item, *object;
@@ -345,6 +395,7 @@ int main() {
     test_array_append_and_access();
     test_array_insert();
     test_array_set();
+    test_array_clone();
     test_array_remove();
     test_array_errors();
 
@@ -352,6 +403,7 @@ int main() {
     test_change_to_object();
     test_object_set();
     test_object_has_key();
+    test_object_clone();
     test_object_remove();
     test_object_errors();
 

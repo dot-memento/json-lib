@@ -166,6 +166,70 @@ void test_change_to_string_nocopy()
     json_free(value);
 }
 
+void test_null_clone()
+{
+    json_value *value = NULL;
+    json_null_create(&value);
+
+    json_value *clone = NULL;
+    json_error error = json_clone(value, &clone);
+
+    ASSERT_JSON_SUCCESS("Clone null value", error);
+    ASSERT_NOT_NULL("Cloned value pointer is not NULL", clone);
+    ASSERT_JSON_TYPE("Cloned value has correct type", clone, JSON_NULL);
+    json_free(value);
+    json_free(clone);
+}
+
+void test_bool_clone()
+{
+    json_value *value = NULL;
+    json_bool_create(true, &value);
+
+    json_value *clone = NULL;
+    json_error error = json_clone(value, &clone);
+
+    ASSERT_JSON_SUCCESS("Clone bool value", error);
+    ASSERT_NOT_NULL("Cloned value pointer is not NULL", clone);
+    ASSERT_JSON_TYPE("Cloned value has correct type", clone, JSON_BOOL);
+    ASSERT_JSON_GET_BOOL("Cloned value is correct", clone, true);
+    json_free(value);
+    json_free(clone);
+}
+
+void test_number_clone()
+{
+    json_value *value = NULL;
+    json_number_create(42.5, &value);
+
+    json_value *clone = NULL;
+    json_error error = json_clone(value, &clone);
+
+    ASSERT_JSON_SUCCESS("Clone number value", error);
+    ASSERT_NOT_NULL("Cloned value pointer is not NULL", clone);
+    ASSERT_JSON_TYPE("Cloned value has correct type", clone, JSON_NUMBER);
+    ASSERT_JSON_GET_NUMBER("Cloned value is correct", clone, 42.5);
+    json_free(value);
+    json_free(clone);
+}
+
+void test_string_clone()
+{
+    const char *test_str = "Hello, JSON!";
+    json_value *value = NULL;
+    json_string_create(test_str, &value);
+
+    json_value *clone = NULL;
+    json_error error = json_clone(value, &clone);
+
+    ASSERT_JSON_SUCCESS("Clone string value", error);
+    ASSERT_NOT_NULL("Cloned value pointer is not NULL", clone);
+    ASSERT_JSON_TYPE("Cloned value has correct type", clone, JSON_STRING);
+    ASSERT_JSON_GET_STRING("Cloned value is correct", clone, test_str);
+    json_free(value);
+    json_free(clone);
+}
+
 void test_null_errors_creation()
 {
     json_value *value;
@@ -269,13 +333,18 @@ int main()
     test_number_creation_and_access();
     test_string_creation_and_access();
     test_string_nocopy_creation_and_access();
-
+    
     test_change_to_null();
     test_change_to_bool();
     test_change_to_number();
     test_change_to_string();
     test_change_to_string_nocopy();
 
+    test_null_clone();
+    test_bool_clone();
+    test_number_clone();
+    test_string_clone();
+    
     test_null_errors_creation();
     test_null_errors_access();
     test_null_errors_modification();

@@ -27,10 +27,14 @@ char *strdup(const char *string)
 
 #endif
 
+#define LINESTR1(file, line) file ":" #line
+#define LINESTR(file, line) LINESTR1(file, line)
+#define FAIL_MSG_BEGIN "FAIL: "LINESTR(__FILE__, __LINE__)": "
+
 #define ASSERT(message, test) do { \
     tests_run++; \
     if (!(test)) { \
-        fprintf(stderr, "FAIL: %s:%d: %s\n", __FILE__, __LINE__, message); \
+        fputs(FAIL_MSG_BEGIN message "\n", stderr); \
         tests_failed++; \
     } \
 } while (0)
@@ -38,7 +42,7 @@ char *strdup(const char *string)
 #define ASSERT_NOT_EQUAL_INT(message, expected, actual) do { \
     tests_run++; \
     if ((expected) == (actual)) { \
-        fprintf(stderr, "FAIL: %s:%d: %s (expected not %lli)\n", __FILE__, __LINE__, message, (long long)(expected)); \
+        fprintf(stderr, FAIL_MSG_BEGIN message" (expected not %lli)\n", (long long)(expected)); \
         tests_failed++; \
     } \
 } while (0)
@@ -46,7 +50,7 @@ char *strdup(const char *string)
 #define ASSERT_EQUAL_INT(message, expected, actual) do { \
     tests_run++; \
     if ((expected) != (actual)) { \
-        fprintf(stderr, "FAIL: %s:%d: %s (expected %lli, got %lli)\n", __FILE__, __LINE__, message, (long long)(expected), (long long)(actual)); \
+        fprintf(stderr, FAIL_MSG_BEGIN message" (expected %lli, got %lli)\n", (long long)(expected), (long long)(actual)); \
         tests_failed++; \
     } \
 } while (0)
@@ -54,7 +58,7 @@ char *strdup(const char *string)
 #define ASSERT_EQUAL_DOUBLE(message, expected, actual) do { \
     tests_run++; \
     if (fabs((expected) - (actual)) > 0.000001) { \
-        fprintf(stderr, "FAIL: %s:%d: %s (expected %f, got %f)\n", __FILE__, __LINE__, message, (expected), (actual)); \
+        fprintf(stderr, FAIL_MSG_BEGIN message" (expected %f, got %f)\n", (expected), (actual)); \
         tests_failed++; \
     } \
 } while (0)
@@ -62,7 +66,7 @@ char *strdup(const char *string)
 #define ASSERT_EQUAL_STRING(message, expected, actual) do { \
     tests_run++; \
     if (!(actual) || strcmp((expected), (actual))) { \
-        fprintf(stderr, "FAIL: %s:%d: %s (expected '%s', got '%s')\n", __FILE__, __LINE__, message, (expected), (actual)); \
+        fprintf(stderr, FAIL_MSG_BEGIN message" (expected '%s', got '%s')\n", (expected), (actual)); \
         tests_failed++; \
     } \
 } while (0)
@@ -70,7 +74,7 @@ char *strdup(const char *string)
 #define ASSERT_NOT_EQUAL_PTR(message, expected, actual) do { \
     tests_run++; \
     if ((expected) == (actual)) { \
-        fprintf(stderr, "FAIL: %s:%d: %s (expected not %p)\n", __FILE__, __LINE__, message, (expected)); \
+        fprintf(stderr, FAIL_MSG_BEGIN message" (expected not %p)\n", (const void*)(expected)); \
         tests_failed++; \
     } \
 } while (0)
@@ -78,7 +82,7 @@ char *strdup(const char *string)
 #define ASSERT_EQUAL_PTR(message, expected, actual) do { \
     tests_run++; \
     if ((expected) != (actual)) { \
-        fprintf(stderr, "FAIL: %s:%d: %s (expected %p, got %p)\n", __FILE__, __LINE__, message, (const void*)(expected), (const void*)(actual)); \
+        fprintf(stderr, FAIL_MSG_BEGIN message" (expected %p, got %p)\n", (const void*)(expected), (const void*)(actual)); \
         tests_failed++; \
     } \
 } while (0)

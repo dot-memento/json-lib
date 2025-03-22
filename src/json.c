@@ -330,6 +330,76 @@ json_error json_object_create(json_value **out)
     return JSON_SUCCESS;
 }
 
+json_error json_clone(const json_value *entry, json_value **out)
+{
+    switch (entry->type)
+    {
+    case JSON_NULL:   return json_null_create(out);
+    case JSON_BOOL:   return json_bool_create(entry->boolean, out);
+    case JSON_NUMBER: return json_number_create(entry->number, out);
+    case JSON_STRING: return json_string_create(entry->string, out);
+
+    case JSON_ARRAY:
+    {
+        json_value *array;
+        json_error error = json_array_create(&array);
+        if (error) return error;
+
+        json_array *current = entry->array;
+        while (current)
+        {
+            json_value *cloned_entry;
+            error = json_clone(current->entry, &cloned_entry);
+            if (error)
+            {
+                json_free(array);
+                return error;
+            }
+            error = json_array_append(array, cloned_entry);
+            if (error)
+            {
+                json_free(cloned_entry);
+                json_free(array);
+                return error;
+            }
+            current = current->next;
+        }
+        *out = array;
+        return JSON_SUCCESS;
+    }
+
+    case JSON_OBJECT:
+    {
+        json_value *object;
+        json_error error = json_object_create(&object);
+        if (error) return error;
+
+        json_object *current = entry->object;
+        while (current)
+        {
+            json_value *cloned_entry;
+            error = json_clone(current->entry, &cloned_entry);
+            if (error)
+            {
+                json_free(object);
+                return error;
+            }
+            error = json_object_set(object, current->key, cloned_entry);
+            if (error)
+            {
+                json_free(cloned_entry);
+                json_free(object);
+                return error;
+            }
+            current = current->next;
+        }
+        *out = object;
+        return JSON_SUCCESS;
+    }
+    }
+    return JSON_ERROR_WRONG_TYPE;
+}
+
 static void free_array(json_array *array)
 {
     while (array)
