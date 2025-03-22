@@ -21,20 +21,31 @@ Include the header in your project:
 #include "json.h"
 ```
 
+For parsing, you can use an optional option structure (you can use NULL instead if you don't care):
+
+```c
+json_error_info error_info;
+json_parse_options options = {
+    .error_info = &error_info; // Optional: for additionnal parsing error info
+    .max_depth = 50 // Default is 1000
+}
+```
+
 Parse JSON from a file (or stdin):
 
 ```c
 // ...
-// Get a FILE pointer: stdin, fopen, etc.
+// FILE *file;
 // ...
 
-json_entry *root = json_parse_file(file);
-if (root == NULL) {
+json_value *root;
+json_error error = json_parse_file(file, &root, &options);
+if (error) {
     // Handle error...
 }
 
 // ...
-// Use the API: json_object_get, json_array_get, json_set_number, etc.
+// Use the API: json_object_get, json_get_bool, json_change_to_number, etc...
 // ...
 
 json_free(root);
@@ -43,14 +54,15 @@ json_free(root);
 Parse JSON from a string:
 
 ```c
+json_value *root;
 char *json_string = "{\"key\": \"value\"}";
-json_entry *root = json_parse_string(json_string);
-if (root == NULL) {
+json_error error = json_parse_string(json_string, &root, &options);
+if (error) {
     // Handle error...
 }
 
 // ...
-// Use the API: json_object_get, json_array_get, json_set_number, etc.
+// Use the API: json_object_get, json_get_bool, json_change_to_number, etc...
 // ...
 
 json_free(root);
@@ -63,4 +75,3 @@ Refer to [json.h](src/json.h) for full API documentation.
 ## License
 
 [MIT License](LICENSE)
-

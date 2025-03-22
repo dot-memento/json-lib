@@ -1,6 +1,6 @@
 /**
  * @file json.c
- * @brief Lightweight JSON parser and manipulation library for C
+ * @brief Implementation of a lightweight JSON parser and manipulation library.
  *
  * @author Michael Teixeira
  * @copyright MIT License
@@ -17,8 +17,10 @@
 #include <ctype.h>
 #include <stdarg.h>
 
-static const size_t MAX_DEPTH = 1000;
-static const size_t INITIAL_BUFFER_SIZE = 16;
+#define CHECK_TYPE(entry, expected_type) if ((entry)->type != (expected_type)) return JSON_ERROR_WRONG_TYPE
+
+static const size_t DEFAULT_MAX_DEPTH = 1000;
+static const size_t INITIAL_STRING_BUFFER_SIZE = 16;
 
 #if !defined(_POSIX_C_SOURCE) && !defined(_DEFAULT_SOURCE) && \
     !defined(_BSD_SOURCE) && !defined(_SVID_SOURCE) && \
@@ -32,6 +34,7 @@ static char *strdup(const char *string)
     char *string_copy = malloc(size + 1);
     return string_copy ? strcpy(string_copy, string) : NULL;
 }
+
 #endif
 
 // --------------------
@@ -62,7 +65,7 @@ static bool string_builder_ensure_capacity(string_builder *builder, size_t min_c
         char *new_data;
         if (builder->allocated_size == 0)
         {
-            builder->allocated_size = INITIAL_BUFFER_SIZE;
+            builder->allocated_size = INITIAL_STRING_BUFFER_SIZE;
             new_data = malloc(builder->allocated_size);
         }
         else
@@ -71,64 +74,58 @@ static bool string_builder_ensure_capacity(string_builder *builder, size_t min_c
             new_data = realloc(builder->data, builder->allocated_size);
         }
         if (!new_data)
-            return false;
+            return true;
         builder->data = new_data;
     }
-    return true;
+    return false;
 }
 
 // Appends a single character to the string builder.
 static bool string_builder_append(string_builder *builder, char c)
 {
-    if (!string_builder_ensure_capacity(builder, builder->size + 1))
-        return false;
+    if (string_builder_ensure_capacity(builder, builder->size + 1)) return true;
 
     builder->data[builder->size++] = c;
     builder->data[builder->size] = '\0';
-    return true;
+    return false;
 }
 
 // Appends a single character to the string builder.
 static bool string_builder_append_string(string_builder *builder, const char *str)
 {
     size_t length = strlen(str);
-    if (!string_builder_ensure_capacity(builder, builder->size + length))
-        return false;
+    if (string_builder_ensure_capacity(builder, builder->size + length)) return true;
 
     memcpy(builder->data + builder->size, str, length);
     builder->size += length;
     builder->data[builder->size] = '\0';
-    return true;
+    return false;
 }
 
-static bool string_builder_append_format(string_builder *builder, const char *format, ...)
+static bool string_builder_append_format(string_builder *builder, const char *format, va_list args)
 {
-    va_list args, args_copy;
-    va_start(args, format);
+    va_list args_copy;
 
     va_copy(args_copy, args);
     int length = vsnprintf(NULL, 0, format, args_copy);
     va_end(args_copy);
 
-    if (length < 0 || !string_builder_ensure_capacity(builder, builder->size + length))
+    if (length < 0 || string_builder_ensure_capacity(builder, builder->size + length))
     {
         va_end(args);
-        return false;
+        return true;
     }
 
     vsprintf(builder->data + builder->size, format, args);
     builder->size += length;
 
-    va_end(args);
-    return true;
+    return false;
 }
 
 // Appends a UTF code point (encoded in UTF-8) to the builder.
 static bool string_builder_append_utf_code_point(string_builder *builder, uint32_t code_point)
 {
-    bool has_capacity = string_builder_ensure_capacity(builder, builder->size + 4);
-    if (!has_capacity)
-        return false;
+    if (string_builder_ensure_capacity(builder, builder->size + 4)) return true;
    
     if (code_point <= 0x7F)
         builder->data[builder->size++] = code_point & 0xFF;
@@ -159,20 +156,47 @@ static bool string_builder_append_utf_code_point(string_builder *builder, uint32
     }
     builder->data[builder->size] = '\0';
 
-    return true;
+    return false;
 }
 
 // Finalizes and builds the string from the builder.
-static char* string_builder_build(string_builder *builder)
+static bool string_builder_build(string_builder *builder, char **out)
 {
     char *string = realloc(builder->data, builder->size + 1);
-    if (!string)
-        return NULL;
+    if (!string) return true;
+
     string[builder->size] = '\0';
     builder->allocated_size = 0;
     builder->size = 0;
     builder->data = NULL;
-    return string;
+    *out = string;
+    return false;
+}
+
+// --------------------
+// JSON Error Handling
+// --------------------
+
+const char* json_error_string(json_error code)
+{
+    switch (code)
+    {
+    case JSON_SUCCESS: return "success";
+    case JSON_ERROR_ALLOCATION: return "allocation error";
+    case JSON_ERROR_NULL: return "null pointer argument";
+    case JSON_ERROR_WRONG_TYPE: return "wrong type";
+    case JSON_ERROR_INDEX_OUT_OF_BOUNDS: return "index out of bounds";
+    case JSON_ERROR_KEY_NOT_FOUND: return "key not found";
+    case JSON_ERROR_IO: return "I/O error";
+    case JSON_ERROR_INVALID_OPTIONS: return "invalid options";
+    case JSON_ERROR_MAX_DEPTH: return "maximum depth exceeded";
+    case JSON_ERROR_NUMBER_FORMAT: return "invalid number format";
+    case JSON_ERROR_ESCAPE_SEQUENCE: return "invalid string escape";
+    case JSON_ERROR_UNICODE: return "invalid unicode sequence";
+    case JSON_ERROR_BUFFER_TOO_SMALL: return "buffer too small";
+    case JSON_ERROR_CIRCULAR_REFERENCE: return "circular reference";
+    default: return "unknown error";
+    }
 }
 
 // --------------------
@@ -181,16 +205,16 @@ static char* string_builder_build(string_builder *builder)
 
 typedef struct json_array {
     struct json_array *next;
-    json_entry *entry;
+    json_value *entry;
 } json_array;
 
 typedef struct json_object {
     struct json_object *next;
     char *key;
-    json_entry *entry;
+    json_value *entry;
 } json_object;
 
-typedef struct json_entry {
+typedef struct json_value {
     json_type type;
     union {
         double number;
@@ -199,155 +223,113 @@ typedef struct json_entry {
         json_array *array;
         json_object *object;
     };
-} json_entry;
+} json_value;
 
 // --------------------
-// JSON Access API
+// JSON Creation API
 // --------------------
 
-// json_object_get: Retrieve a value from a JSON object by key.
-// json_array_get: Retrieve a value from a JSON array by index.
-// json_array_count: Count the number of entries in a JSON array.
-
-json_entry* json_object_get(const json_entry *object, const char *key)
+json_error json_null_create(json_value **out)
 {
-    if (!object || object->type != JSON_OBJECT)
-        return NULL;
+    if (!out) return JSON_ERROR_NULL;
 
-    json_object *current = object->object;
-    while (current)
-    {
-        if (!strcmp(current->key, key))
-            return current->entry;
-        current = current->next;
-    }
-    return NULL;
+    json_value *entry = malloc(sizeof(json_value));
+    if (!entry) return JSON_ERROR_ALLOCATION;
+
+    *entry = (json_value) {0};
+    entry->type = JSON_NULL;
+    *out = entry;
+    return JSON_SUCCESS;
 }
 
-json_entry* json_array_get(const json_entry *array, size_t index)
+json_error json_bool_create(bool value, json_value **out)
 {
-    if (!array || array->type != JSON_ARRAY)
-        return NULL;
+    if (!out) return JSON_ERROR_NULL;
 
-    json_array *current = array->array;
-    for (; index != 0 && current; --index)
-        current = current->next;
-    return current ? current->entry : NULL;
-}
+    json_value *entry = malloc(sizeof(json_value));
+    if (!entry) return JSON_ERROR_ALLOCATION;
 
-size_t json_array_count(const json_entry *array)
-{
-    if (!array || array->type != JSON_ARRAY)
-        return 0;
-
-    size_t count = 0;
-    for (json_array *current = array->array; current; current = current->next)
-        ++count;
-    return count;
-}
-
-// json_get_number, json_get_number_safe, json_get_string, json_get_string_safe,
-// json_get_bool, json_get_bool, json_get_type: 
-// Functions to retrieve values or type from JSON entries.
-
-double json_get_number(const json_entry *entry)
-{
-    return entry->number;
-}
-
-bool json_get_number_safe(const json_entry *entry, double *value)
-{
-    if (!entry || entry->type != JSON_NUMBER)
-        return false;
-    *value = json_get_number(entry);
-    return true;
-}
-
-const char* json_get_string(const json_entry *entry)
-{
-    return entry->string;
-}
-
-bool json_get_string_safe(const json_entry *entry, const char **string)
-{
-    if (!entry || entry->type != JSON_STRING)
-        return false;
-    *string = json_get_string(entry);
-    return true;
-}
-
-bool json_get_bool(const json_entry *entry)
-{
-    return entry->boolean;
-}
-
-bool json_get_bool_safe(const json_entry *entry, bool *value)
-{
-    if (!entry || entry->type != JSON_BOOL)
-        return false;
-    *value = json_get_bool(entry);
-    return true;
-}
-
-json_type json_get_type(const json_entry *entry)
-{
-    return entry ? entry->type : JSON_NULL;
-}
-
-// --------------------
-// JSON Modification API
-// --------------------
-
-json_entry* json_new_null()
-{
-    json_entry *entry = malloc(sizeof(json_entry));
-    if (!entry)
-        return NULL;
-    *entry = (json_entry) {0};
-    return entry;
-}
-
-json_entry* json_new_number(double value)
-{
-    json_entry *entry = malloc(sizeof(json_entry));
-    if (!entry)
-        return NULL;
-    entry->type = JSON_NUMBER;
-    entry->number = value;
-    return entry;
-}
-
-json_entry* json_new_string(char *value)
-{
-    if (!value)
-        return NULL;
-
-    json_entry *entry = malloc(sizeof(json_entry));
-    if (!entry)
-        return NULL;
-    char *string_copy = strdup(value);
-    if (!string_copy)
-    {
-        free(entry);
-        return NULL;
-    }
-    entry->type = JSON_STRING;
-    entry->string = string_copy;
-    return entry;
-}
-
-json_entry* json_new_bool(bool value)
-{
-    json_entry *entry = malloc(sizeof(json_entry));
-    if (!entry)
-        return NULL;
+    *entry = (json_value) {0};
     entry->type = JSON_BOOL;
     entry->boolean = value;
-    return entry;
+    *out = entry;
+    return JSON_SUCCESS;
 }
 
+json_error json_number_create(double value, json_value **out)
+{
+    if (!out) return JSON_ERROR_NULL;
 
-// Frees a JSON array iteratively.
+    json_value *entry = malloc(sizeof(json_value));
+    if (!entry) return JSON_ERROR_ALLOCATION;
+
+    *entry = (json_value) {0};
+    entry->type = JSON_NUMBER;
+    entry->number = value;
+    *out = entry;
+    return JSON_SUCCESS;
+}
+
+json_error json_string_create(const char *value, json_value **out)
+{
+    if (!value || !out) return JSON_ERROR_NULL;
+
+    char *string_copy = strdup(value);
+    if (!string_copy) return JSON_ERROR_ALLOCATION;
+
+    json_value *entry = malloc(sizeof(json_value));
+    if (!entry)
+    {
+        free(string_copy);
+        return JSON_ERROR_ALLOCATION;
+    }
+    *entry = (json_value) {0};
+    entry->type = JSON_STRING;
+    entry->string = string_copy;
+    *out = entry;
+    return JSON_SUCCESS;
+}
+
+json_error json_string_create_nocopy(char *value, json_value **out)
+{
+    if (!value || !out) return JSON_ERROR_NULL;
+
+    json_value *entry = malloc(sizeof(json_value));
+    if (!entry) return JSON_ERROR_ALLOCATION;
+
+    *entry = (json_value) {0};
+    entry->type = JSON_STRING;
+    entry->string = value;
+    *out = entry;
+    return JSON_SUCCESS;
+}
+
+json_error json_array_create(json_value **out)
+{
+    if (!out) return JSON_ERROR_NULL;
+
+    json_value *entry = malloc(sizeof(json_value));
+    if (!entry) return JSON_ERROR_ALLOCATION;
+
+    *entry = (json_value) {0};
+    entry->type = JSON_ARRAY;
+    *out = entry;
+    return JSON_SUCCESS;
+}
+
+json_error json_object_create(json_value **out)
+{
+    if (!out) return JSON_ERROR_NULL;
+
+    json_value *entry = malloc(sizeof(json_value));
+    if (!entry) return JSON_ERROR_ALLOCATION;
+
+    *entry = (json_value) {0};
+    entry->type = JSON_OBJECT;
+    *out = entry;
+    return JSON_SUCCESS;
+}
+
 static void free_array(json_array *array)
 {
     while (array)
@@ -359,7 +341,6 @@ static void free_array(json_array *array)
     }
 }
 
-// Frees a JSON object iteratively.
 static void free_object(json_object *object)
 {
     while (object)
@@ -372,40 +353,317 @@ static void free_object(json_object *object)
     }
 }
 
-// Frees a JSON entry (and nested parts).
-void json_free(json_entry *entry)
+static void free_content(json_value *entry)
 {
-    if (!entry)
-        return;
-
     switch (entry->type)
     {
-    case JSON_STRING:
-        free(entry->string);
-        break;
-
-    case JSON_ARRAY:
-        free_array(entry->array);
-        break;
-
-    case JSON_OBJECT:
-        free_object(entry->object);
-        break;
-    
-    default:
-        break;
+    case JSON_STRING: free(entry->string);        return;
+    case JSON_ARRAY:  free_array(entry->array);   return;
+    case JSON_OBJECT: free_object(entry->object); return;
+    default: return;
     }
+}
+
+void json_free(json_value *entry)
+{
+    if (!entry) return;
+    free_content(entry);
     free(entry);
 }
 
-// json_object_set, json_object_remove, json_array_append,
-// json_array_insert, json_array_remove:
-// Functions to modify JSON objects and arrays.
+// --------------------
+// JSON Getter API
+// --------------------
 
-bool json_object_set(json_entry *object, const char *key, json_entry *value)
+json_error json_get_type(const json_value *entry, json_type *out)
 {
-    if (!object || object->type != JSON_OBJECT)
-        return false;
+    if (!entry) return JSON_ERROR_NULL;
+    *out = entry->type;
+    return JSON_SUCCESS;
+}
+
+json_error json_get_bool(const json_value *entry, bool *out)
+{
+    if (!entry || !out) return JSON_ERROR_NULL;
+    CHECK_TYPE(entry, JSON_BOOL);
+    *out = entry->boolean;
+    return JSON_SUCCESS;
+}
+
+json_error json_get_number(const json_value *entry, double *out)
+{
+    if (!entry || !out) return JSON_ERROR_NULL;
+    CHECK_TYPE(entry, JSON_NUMBER);
+    *out = entry->number;
+    return JSON_SUCCESS;
+}
+
+json_error json_get_string(const json_value *entry, const char **out)
+{
+    if (!entry || !out) return JSON_ERROR_NULL;
+    CHECK_TYPE(entry, JSON_STRING);
+    *out = entry->string;
+    return JSON_SUCCESS;
+}
+
+// --------------------
+// JSON Setter API
+// --------------------
+
+json_error json_change_to_null(json_value *entry)
+{
+    if (!entry) return JSON_ERROR_NULL;
+    free_content(entry);
+    *entry = (json_value) {0};
+    entry->type = JSON_NULL;
+    return JSON_SUCCESS;
+}
+
+json_error json_change_to_bool(json_value *entry, bool value)
+{
+    if (!entry) return JSON_ERROR_NULL;
+    free_content(entry);
+    *entry = (json_value) {0};
+    entry->type = JSON_BOOL;
+    entry->boolean = value;
+    return JSON_SUCCESS;
+}
+
+json_error json_change_to_number(json_value *entry, double value)
+{
+    if (!entry) return JSON_ERROR_NULL;
+    free_content(entry);
+    *entry = (json_value) {0};
+    entry->type = JSON_NUMBER;
+    entry->number = value;
+    return JSON_SUCCESS;
+}
+
+json_error json_change_to_string(json_value *entry, const char *string)
+{
+    if (!entry || !string) return JSON_ERROR_NULL;
+
+    char *string_copy = strdup(string);
+    if (!string_copy) return JSON_ERROR_ALLOCATION;
+
+    free_content(entry);
+    *entry = (json_value) {0};
+    entry->type = JSON_STRING;
+    entry->string = string_copy;
+    return JSON_SUCCESS;
+}
+
+json_error json_change_to_string_nocopy(json_value *entry, char *string)
+{
+    if (!entry || !string) return JSON_ERROR_NULL;
+
+    free_content(entry);
+    *entry = (json_value) {0};
+    entry->type = JSON_STRING;
+    entry->string = string;
+    return JSON_SUCCESS;
+}
+
+json_error json_change_to_object(json_value *entry)
+{
+    if (!entry) return JSON_ERROR_NULL;
+    free_content(entry);
+    *entry = (json_value) {0};
+    entry->type = JSON_OBJECT;
+    return JSON_SUCCESS;
+}
+
+json_error json_change_to_array(json_value *entry)
+{
+    if (!entry) return JSON_ERROR_NULL;
+    free_content(entry);
+    *entry = (json_value) {0};
+    entry->type = JSON_ARRAY;
+    return JSON_SUCCESS;
+}
+
+// --------------------
+// JSON Array API
+// --------------------
+
+json_error json_array_length(const json_value *array, size_t *out)
+{
+    if (!array || !out) return JSON_ERROR_NULL;
+    CHECK_TYPE(array, JSON_ARRAY);
+
+    size_t count = 0;
+    for (json_array *current = array->array; current; current = current->next)
+        ++count;
+    *out = count;
+    return JSON_SUCCESS;
+}
+
+json_error json_array_get(const json_value *array, size_t index, json_value **out)
+{
+    if (!array || !out) return JSON_ERROR_NULL;
+    CHECK_TYPE(array, JSON_ARRAY);
+
+    json_array *current = array->array;
+    for (; index != 0 && current; --index)
+        current = current->next;
+
+    if (!current) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
+    *out = current->entry;
+    return JSON_SUCCESS;
+}
+
+json_error json_array_set(json_value *array, size_t index, json_value *value)
+{
+    if (!array || !value) return JSON_ERROR_NULL;
+    CHECK_TYPE(array, JSON_ARRAY);
+
+    json_array *current = array->array;
+    for (; index != 0 && current; --index)
+        current = current->next;
+
+    if (!current) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
+    json_free(current->entry);
+    current->entry = value;
+    return JSON_SUCCESS;
+}
+
+json_error json_array_append(json_value *array, json_value *value)
+{
+    if (!array || !value) return JSON_ERROR_NULL;
+    CHECK_TYPE(array, JSON_ARRAY);
+
+    json_array *new_array_entry = malloc(sizeof(json_array));
+    if (!new_array_entry) return JSON_ERROR_ALLOCATION;
+    
+    new_array_entry->entry = value;
+    new_array_entry->next = NULL;
+
+    json_array *first_entry = array->array;
+    if (!first_entry)
+    {
+        array->array = new_array_entry;
+        return JSON_SUCCESS;
+    }
+    
+    json_array *last_entry = NULL;
+    for (json_array *entry = first_entry; entry; entry = entry->next)
+        last_entry = entry;
+    last_entry->next = new_array_entry;
+    return JSON_SUCCESS;
+}
+
+json_error json_array_insert(json_value *array, size_t index, json_value *value)
+{
+    if (!array || !value) return JSON_ERROR_NULL;
+    CHECK_TYPE(array, JSON_ARRAY);
+
+    json_array *prev = NULL;
+    json_array *current = array->array;
+    for (; index != 0 && current; --index)
+    {
+        prev = current;
+        current = current->next;
+    }
+
+    if (index != 0) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
+
+    json_array *new_array_entry = malloc(sizeof(json_array));
+    if (!new_array_entry) return JSON_ERROR_ALLOCATION;
+    new_array_entry->entry = value;
+    new_array_entry->next = current;
+
+    if (prev)
+        prev->next = new_array_entry;
+    else
+        array->array = new_array_entry;
+    return JSON_SUCCESS;
+}
+
+json_error json_array_remove(json_value *array, size_t index, json_value **out)
+{
+    if (!array) return JSON_ERROR_NULL;
+    CHECK_TYPE(array, JSON_ARRAY);
+
+    json_array *prev = NULL;
+    json_array *current = array->array;
+    for (; index != 0 && current; --index)
+    {
+        prev = current;
+        current = current->next;
+    }
+
+    if (!current) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
+
+    if (prev)
+        prev->next = current->next;
+    else
+        array->array = current->next;
+
+    if (out)
+        *out = current->entry;
+    else
+        json_free(current->entry);
+    free(current);
+    return JSON_SUCCESS;
+}
+
+// --------------------
+// JSON Object API
+// --------------------
+
+json_error json_object_size(const json_value *object, size_t *out)
+{
+    if (!object || !out) return JSON_ERROR_NULL;
+    CHECK_TYPE(object, JSON_OBJECT);
+
+    size_t count = 0;
+    for (json_object *current = object->object; current; current = current->next)
+        ++count;
+    *out = count;
+    return JSON_SUCCESS;
+}
+
+json_error json_object_has_key(const json_value *object, const char *key, bool *out)
+{
+    if (!object || !key || !out) return JSON_ERROR_NULL;
+    CHECK_TYPE(object, JSON_OBJECT);
+
+    json_object *current = object->object;
+    while (current)
+    {
+        if (!strcmp(current->key, key))
+        {
+            *out = true;
+            return JSON_SUCCESS;
+        }
+        current = current->next;
+    }
+    *out = false;
+    return JSON_SUCCESS;
+}
+
+json_error json_object_get(const json_value *object, const char *key, json_value **out)
+{
+    if (!object || !key || !out) return JSON_ERROR_NULL;
+    CHECK_TYPE(object, JSON_OBJECT);
+
+    json_object *current = object->object;
+    while (current)
+    {
+        if (!strcmp(current->key, key))
+        {
+            *out = current->entry;
+            return JSON_SUCCESS;
+        }
+        current = current->next;
+    }
+    return JSON_ERROR_KEY_NOT_FOUND;
+}
+
+json_error json_object_set(json_value *object, const char *key, json_value *value)
+{
+    if (!object || !key || !value) return JSON_ERROR_NULL;
+    CHECK_TYPE(object, JSON_OBJECT);
 
     json_object *prev = NULL;
     json_object *current = object->object;
@@ -415,21 +673,20 @@ bool json_object_set(json_entry *object, const char *key, json_entry *value)
         {
             json_free(current->entry);
             current->entry = value;
-            return true;
+            return JSON_SUCCESS;
         }
         prev = current;
         current = current->next;
     }
 
     char *key_copy = strdup(key);
-    if (!key_copy)
-        return false;
+    if (!key_copy) return JSON_ERROR_ALLOCATION;
 
     json_object *new_object_entry = malloc(sizeof(json_object));
     if (!new_object_entry)
     {
         free(key_copy);
-        return false;
+        return JSON_ERROR_ALLOCATION;
     }
     new_object_entry->entry = value;
     new_object_entry->key = key_copy;
@@ -439,13 +696,13 @@ bool json_object_set(json_entry *object, const char *key, json_entry *value)
         prev->next = new_object_entry;
     else
         object->object = new_object_entry;
-    return true;
+    return JSON_SUCCESS;
 }
 
-json_entry* json_object_remove(json_entry *object, const char *key)
+json_error json_object_remove(json_value *object, const char *key, json_value **out)
 {
-    if (!object || object->type != JSON_OBJECT)
-        return NULL;
+    if (!object || !key) return JSON_ERROR_NULL;
+    CHECK_TYPE(object, JSON_OBJECT);
 
     json_object *prev = NULL;
     json_object *current = object->object;
@@ -458,483 +715,55 @@ json_entry* json_object_remove(json_entry *object, const char *key)
             else
                 object->object = current->next;
             
-            json_entry *found_entry = current->entry;
+            if (out)
+                *out = current->entry;
+            else
+                json_free(current->entry);
             free(current->key);
             free(current);
-            return found_entry;
+            return JSON_SUCCESS;
         }
         prev = current;
         current = current->next;
     }
-    return NULL;
-}
-
-bool json_array_append(json_entry *array, json_entry *value)
-{
-    if (!array || array->type != JSON_ARRAY)
-        return false;
-
-    json_array *last_array_entry = NULL;
-    json_array *current = array->array;
-    for (; current; current = current->next)
-        last_array_entry = current;
-
-    json_array *new_array_entry = malloc(sizeof(json_array));
-    if (!new_array_entry)
-        return false;
-    new_array_entry->entry = value;
-    new_array_entry->next = NULL;
-
-    if (last_array_entry)
-        last_array_entry->next = new_array_entry;
-    else
-        array->array = new_array_entry;
-    return true;
-}
-
-bool json_array_insert(json_entry *array, size_t index, json_entry *value)
-{
-    if (!array || array->type != JSON_ARRAY)
-        return false;
-
-    json_array *prev = NULL;
-    json_array *current = array->array;
-    for (; index != 0 && current; --index)
-    {
-        prev = current;
-        current = current->next;
-    }
-
-    json_array *new_array_entry = malloc(sizeof(json_array));
-    if (!new_array_entry)
-        return false;
-    new_array_entry->entry = value;
-    new_array_entry->next = current;
-
-    if (prev)
-        prev->next = new_array_entry;
-    else
-        array->array = new_array_entry;
-    return true;
-}
-
-json_entry* json_array_remove(json_entry *array, size_t index)
-{
-    if (!array || array->type != JSON_ARRAY)
-        return NULL;
-
-    json_array *prev = NULL;
-    json_array *current = array->array;
-    for (; index != 0 && current; --index)
-    {
-        prev = current;
-        current = current->next;
-    }
-
-    if (!current)
-        return NULL;
-
-    json_entry *entry = current->entry;
-    if (prev)
-        prev->next = current->next;
-    else
-        array->array = current->next;
-    
-    free(current);
-
-    return entry;
-}
-
-// Setter functions to update JSON entries:
-// json_set_null, json_set_number, json_set_string, json_set_bool,
-// json_set_object, json_set_array.
-
-void json_set_null(json_entry *entry)
-{
-    switch (entry->type)
-    {
-    case JSON_STRING:
-        free(entry->string);
-        break;
-
-    case JSON_ARRAY:
-        free_array(entry->array);
-        break;
-
-    case JSON_OBJECT:
-        free_object(entry->object);
-        break;
-    
-    default:
-        break;
-    }
-    *entry = (json_entry) {0};
-}
-
-void json_set_number(json_entry *entry, double value)
-{
-    json_set_null(entry);
-    entry->type = JSON_NUMBER;
-    entry->number = value;
-}
-
-bool json_set_string(json_entry *entry, const char *new_string)
-{
-    char *string_copy = strdup(new_string);
-    if (!string_copy)
-        return false;
-
-    json_set_null(entry);
-    entry->type = JSON_STRING;
-    entry->string = string_copy;
-    return true;
-}
-
-void json_set_bool(json_entry *entry, bool value)
-{
-    json_set_null(entry);
-    entry->type = JSON_BOOL;
-    entry->boolean = value;
-}
-
-void json_set_object(json_entry *entry)
-{
-    json_set_null(entry);
-    entry->type = JSON_OBJECT;
-}
-
-void json_set_array(json_entry *entry)
-{
-    json_set_null(entry);
-    entry->type = JSON_ARRAY;
-}
-
-// --------------------
-// JSON Printing Functions
-// --------------------
-
-typedef struct json_printer {
-    const json_print_options *options;
-    size_t depth;
-    bool error;
-
-    void (*putc)(struct json_printer *printer, char c);
-    void (*puts)(struct json_printer *printer, const char *str);
-    void (*printf)(struct json_printer *printer, const char *format, ...);
-    
-    union
-    {
-        FILE *output_file;
-        string_builder *output_builder;
-    };
-} json_printer;
-
-static void fprint_entry(json_printer *printer, const json_entry *entry);
-
-static void report_printing_error(json_printer *printer, const char *error_fmt, ...)
-{
-    printer->error = true;
-
-    if (!printer->options->error_callback)
-        return;
-
-    va_list args, args_copy;
-    va_start(args, error_fmt);
-
-    va_copy(args_copy, args);
-    int size = vsnprintf(NULL, 0, error_fmt, args_copy);
-    va_end(args_copy);
-
-    if (size < 0)
-    {
-        va_end(args);
-        printer->options->error_callback("error format encoding error", printer->options->user_data);
-        return;
-    }
-
-    char *error_msg = malloc(size + 1);
-    if (!error_msg)
-    {
-        printer->options->error_callback("couldn't allocate error string buffer", printer->options->user_data);
-    }
-    
-    vsprintf(error_msg, error_fmt, args);
-    va_end(args);
-
-    printer->options->error_callback(error_msg, printer->options->user_data);
-
-    free(error_msg);
-}
-
-// Writes indentation spaces to the file.
-static void fprint_indent(json_printer *printer)
-{
-    size_t indent = printer->options->indent;
-    if (indent == 0)
-        return;
-
-    printer->putc(printer, '\n');
-    for (indent *= printer->depth; indent != 0; --indent)
-        printer->putc(printer, ' ');
-}
-
-// Prints a JSON array with proper formatting.
-static void fprint_array(json_printer *printer, const json_array *array)
-{
-    printer->putc(printer, '[');
-
-    printer->depth++;
-    const json_array *entry = array;
-    while (entry)
-    {
-
-        fprint_indent(printer);
-
-        fprint_entry(printer, entry->entry);
-
-        entry = entry->next;
-        if (entry)
-            printer->putc(printer, ',');
-
-    }
-    printer->depth--;
-
-    fprint_indent(printer);
-    printer->putc(printer, ']');
-}
-
-// Prints a JSON object with proper formatting.
-static void fprint_object(json_printer *printer, const json_object *object)
-{
-    printer->putc(printer, '{');
-
-    printer->depth++;
-    const json_object *entry = object;
-    while (entry)
-    {
-        fprint_indent(printer);
-
-        printer->printf(printer, "\"%s\": ", entry->key);
-        fprint_entry(printer, entry->entry);
-
-        entry = entry->next;
-        if (entry)
-            printer->putc(printer, ',');
-    }
-    printer->depth--;
-
-    fprint_indent(printer);
-    printer->putc(printer, '}');
-}
-
-// Writes a JSON string escaping special characters.
-static void fprint_escape_string(json_printer *printer, char *str)
-{
-    for (; *str != '\0'; ++str)
-    {
-        if ((unsigned char)*str < 0x20 || *str == 0x7F)
-        {
-            printer->printf(printer, "\\u00%02X", *str & 0xFF);
-            continue;
-        }
-
-        switch (*str)
-        {
-        case '"':  printer->puts(printer, "\\\""); break;
-        case '\\': printer->puts(printer, "\\\\"); break;
-        case '/':  printer->puts(printer, "\\/"); break;
-        case '\b': printer->puts(printer, "\\b"); break;
-        case '\f': printer->puts(printer, "\\f"); break;
-        case '\n': printer->puts(printer, "\\n"); break;
-        case '\r': printer->puts(printer, "\\r"); break;
-        case '\t': printer->puts(printer, "\\t"); break;
-        default:   printer->putc(printer, *str); break;
-        }
-    }
-}
-
-// Prints a JSON entry based on its type and formatting.
-static void fprint_entry(json_printer *printer, const json_entry *entry)
-{
-    if (!entry)
-        return;
-
-    if (printer->depth > MAX_DEPTH)
-    {
-        printer->error = true;
-        printer->puts(printer, "null");
-        report_printing_error(printer, "maximum depth exceeded");
-        return;
-    }
-
-    switch (entry->type)
-    {
-    case JSON_NULL:
-        printer->puts(printer, "null");
-        break;
-
-    case JSON_NUMBER:
-        printer->printf(printer, "%g", entry->number);
-        break;
-
-    case JSON_STRING:
-        printer->putc(printer, '"');
-        fprint_escape_string(printer, entry->string);
-        printer->putc(printer, '"');
-        break;
-
-    case JSON_BOOL:
-        printer->puts(printer, entry->boolean ? "true" : "false");
-        break;
-
-    case JSON_ARRAY:
-        fprint_array(printer, entry->array);
-        break;
-
-    case JSON_OBJECT:
-        fprint_object(printer, entry->object);
-        break;
-    }
-}
-
-static void default_print_error_callback(const char *error_msg, void *user_data)
-{
-    (void)user_data;
-    fprintf(stderr, "JSON printing error: %s\n", error_msg);
-}
-
-static const json_print_options DEFAULT_PRINT_OPTIONS = {
-    .indent = 2,
-    .error_callback = default_print_error_callback,
-    .user_data = NULL
-};
-
-static void putc_to_file(json_printer *printer, char c)
-{
-    fputc(c, printer->output_file);
-}
-
-static void puts_to_file(json_printer *printer, const char *str)
-{
-    fputs(str, printer->output_file);
-}
-
-static void printf_to_file(json_printer *printer, const char *format, ...)
-{
-    va_list args;
-    va_start(args, format);
-    vfprintf(printer->output_file, format, args);
-    va_end(args);
-}
-
-bool json_write_to_file(FILE *file, const json_entry *entry, const json_print_options *options)
-{
-    if (!options)
-        options = &DEFAULT_PRINT_OPTIONS;
-
-    json_printer printer = {
-        .options = options,
-        .depth = 0,
-        .error = false,
-        .putc = putc_to_file,
-        .puts = puts_to_file,
-        .printf = printf_to_file,
-        .output_file = file
-    };
-
-    if (!file)
-    {
-        report_printing_error(&printer, "file is NULL");
-        return false;
-    }
-
-    fprint_entry(&printer, entry);
-    if (options->indent != 0)
-        printer.putc(&printer, '\n');
-
-    return !printer.error;
-}
-
-static void putc_to_string(json_printer *printer, char c)
-{
-    string_builder_append(printer->output_builder, c);
-}
-
-static void puts_to_string(json_printer *printer, const char *str)
-{
-    string_builder_append_string(printer->output_builder, str);
-}
-
-static void printf_to_string(json_printer *printer, const char *format, ...)
-{
-    va_list args;
-    va_start(args, format);
-    string_builder_append_format(printer->output_builder, format, args);
-    va_end(args);
-}
-
-bool json_write_to_string(char **dst, const json_entry *entry, const json_print_options *options)
-{
-    if (!options)
-        options = &DEFAULT_PRINT_OPTIONS;
-
-    string_builder builder = {0};
-
-    json_printer printer = {
-        .options = options,
-        .depth = 0,
-        .error = false,
-        .putc = putc_to_string,
-        .puts = puts_to_string,
-        .printf = printf_to_string,
-        .output_builder = &builder
-    };
-
-    fprint_entry(&printer, entry);
-    if (options->indent != 0)
-        printer.putc(&printer, '\n');
-
-    if (!printer.error)
-    {
-        *dst = string_builder_build(&builder);
-        if (!*dst)
-            report_printing_error(&printer, "couldn't reallocate buffer");
-    }
-
-    if (printer.error)
-        string_builder_free(&builder);
-        
-    return !printer.error;
+    return JSON_ERROR_KEY_NOT_FOUND;
 }
 
 // ----------
 // JSON Parsing
 // ----------
 
-// Structure that maintains parsing state.
+const json_parse_options JSON_DEFAULT_PARSE_OPTIONS = {
+    .error_info = NULL,
+    .max_depth = DEFAULT_MAX_DEPTH
+};
+
 typedef struct json_parser {
     const json_parse_options *options;
-    bool error;
+    json_error_info *error_info;
 
     union
     {
         FILE *input_file;
         const char *input_string;
     };
+    int (*getc)(struct json_parser *parser);
     
-    int last_c;
     size_t line, column;
     size_t depth;
-    int (*getc)(struct json_parser *parser);
+    int last_c;
+    json_error error;
 } json_parser;
 
 // Reports a parsing error at the current location.
-static void report_parsing_error(json_parser *parser, const char *error_fmt, ...)
+static void report_parsing_error(json_parser *parser, json_error error_type, const char *error_fmt, ...)
 {
-    parser->error = true;
+    parser->error = error_type;
 
-    if (!parser->options->error_callback)
-        return;
+    if (!parser->error_info) return;
+    parser->error_info->line = parser->line;
+    parser->error_info->column = parser->column;
+    parser->error_info->error = error_type;
 
     va_list args, args_copy;
     va_start(args, error_fmt);
@@ -942,40 +771,25 @@ static void report_parsing_error(json_parser *parser, const char *error_fmt, ...
     va_copy(args_copy, args);
     int size = vsnprintf(NULL, 0, error_fmt, args_copy);
     va_end(args_copy);
-
     if (size < 0)
     {
         va_end(args);
-        parser->options->error_callback(parser->line, parser->column,
-            "error format encoding error", parser->options->user_data);
+        strcpy(parser->error_info->message, "invalid error message format");
         return;
     }
 
-    char *error_msg = malloc(size + 1);
-    if (!error_msg)
-    {
-        parser->options->error_callback(parser->line, parser->column,
-            "couldn't allocate error string buffer", parser->options->user_data);
-    }
-    
-    vsprintf(error_msg, error_fmt, args);
+    vsnprintf(parser->error_info->message, 256, error_fmt, args);
     va_end(args);
-
-    parser->options->error_callback(parser->line, parser->column,
-        error_msg, parser->options->user_data);
-
-    free(error_msg);
 }
 
-static json_entry* parse_entry(json_parser *parser);
+static bool parse_entry(json_parser *parser, json_value **out);
 
 // Reads the next character and updates line/column.
 static void consume(json_parser *parser)
 {
-    if (parser->last_c == EOF)
-        return;
-
+    if (parser->last_c == EOF) return;
     parser->last_c = parser->getc(parser);
+
     if (parser->last_c == '\n')
     {
         parser->line++;
@@ -997,38 +811,41 @@ static bool expect(json_parser *parser, char expected_c)
 {
     if (parser->last_c != expected_c)
     {
-        report_parsing_error(parser, "expected '%c', found '%c'", expected_c, parser->last_c);
-        return false;
+        report_parsing_error(parser, JSON_ERROR_UNEXPECTED_CHARACTER,
+            "expected '%c', found '%c'", expected_c, parser->last_c);
+        return true;
     }
+
     consume(parser);
     skip_blank(parser);
-    return true;
+    return false;
 }
 
 // Builds and returns a string from characters matching a predicate.
-static char* get_string(json_parser *parser, bool (*predicate)(int c))
+static bool get_string(json_parser *parser, bool (*predicate)(int c), char **out)
 {
     string_builder builder = {0};
 
     while (predicate(parser->last_c))
     {
-        if (!string_builder_append(&builder, parser->last_c))
+        if (string_builder_append(&builder, parser->last_c))
             goto alloc_error;
         consume(parser);
     }
 
     skip_blank(parser);
 
-    char *string = string_builder_build(&builder);
-    if (!string)
+    char *string;
+    if (string_builder_build(&builder, &string))
         goto alloc_error;
 
-    return string;
+    *out = string;
+    return false;
 
 alloc_error:
     string_builder_free(&builder);
-    report_parsing_error(parser, "couldn't reallocate buffer");
-    return NULL;
+    report_parsing_error(parser, JSON_ERROR_ALLOCATION, "couldn't reallocate string buffer");
+    return true;
 }
 
 // Converts a hexadecimal digit to its value. Returns -1 if invalid.
@@ -1041,7 +858,7 @@ static int hex_digit_to_value(char c)
 }
 
 // Parses 4 hexadecimal digits into a UTF-16 code unit.
-static uint32_t parse_utf16_code_unit(json_parser *parser)
+static bool parse_utf16_code_unit(json_parser *parser, uint32_t *out)
 {
     uint32_t code_point = 0;
     for (size_t i = 0; i < 4; ++i)
@@ -1049,93 +866,102 @@ static uint32_t parse_utf16_code_unit(json_parser *parser)
         int digit = hex_digit_to_value(parser->last_c);
         if (digit < 0)
         {
-            report_parsing_error(parser, "invalid hexadecimal digit '%c'", parser->last_c);
-            return 0;
+            report_parsing_error(parser, JSON_ERROR_UNICODE, "invalid hexadecimal digit '%c'", parser->last_c);
+            return true;
         }
         code_point = (code_point << 4) | digit;
         consume(parser);
     }
-    return code_point;
+    *out = code_point;
+    return false;
 }
 
 // Parses Unicode escape sequences, including surrogate pairs.
-static uint32_t parse_utf16_escape(json_parser *parser)
+static bool parse_utf16_escape(json_parser *parser, uint32_t *out)
 {
-    uint32_t code_point = parse_utf16_code_unit(parser);
-    if (parser->error)
-        return 0;
+    uint32_t code_point;
+    if (parse_utf16_code_unit(parser, &code_point)) return true;
 
     if (code_point < 0xD800 || 0xDFFF < code_point)
-        return code_point;
+    {
+        *out = code_point;
+        return false;
+    }
 
     if (0xDBFF < code_point)
     {
-        report_parsing_error(parser, "invalid high surrogate range U+%04X", code_point);
-        return 0;
+        report_parsing_error(parser, JSON_ERROR_UNICODE, "invalid high surrogate range U+%04X", code_point);
+        return true;
     }
 
-    if (!expect(parser, '\\')) return 0;
-    if (!expect(parser, 'u')) return 0;
+    // Comma operators are evil, but this is the most readable way to do this.
+    if (parser->last_c != '\\' ||
+        (consume(parser), parser->last_c) != 'u')
+    {
+        report_parsing_error(parser, JSON_ERROR_UNICODE, "missing low surrogate after high surrogate U+%04X", code_point);
+        return true;
+    }
+    consume(parser);
 
-    uint32_t low_surrogate = parse_utf16_code_unit(parser);
-    if (parser->error)
-        return 0;
+    uint32_t low_surrogate;
+    if (parse_utf16_code_unit(parser, &low_surrogate))
+        return true;
 
     if (low_surrogate < 0xDC00 || 0xDFFF < low_surrogate)
     {
-        report_parsing_error(parser, "invalid low surrogate range U+%04X", low_surrogate);
-        return 0;
+        report_parsing_error(parser, JSON_ERROR_UNICODE, "invalid low surrogate range U+%04X", low_surrogate);
+        return true;
     }  
 
     code_point = 0x10000 + (((code_point & 0x3FF) << 10) + (low_surrogate & 0x3FF));
     if (code_point > 0x10FFFF)
     {
-        report_parsing_error(parser, "invalid code point U+%04X", code_point);
-        return 0;
+        report_parsing_error(parser, JSON_ERROR_UNICODE, "invalid code point U+%04X", code_point);
+        return true;
     }
 
-    return code_point;
+    *out = code_point;
+    return false;
 }
 
 // Processes current escape sequence.
 static bool consume_escaped_character(json_parser *parser, string_builder *builder)
 {
-    assert(parser->last_c == '\\');
+    if (expect(parser, '\\'))
+        return true;
 
+    char escape_sequence = parser->last_c;
     consume(parser);
-    bool success;
-    switch (parser->last_c)
+
+    switch (escape_sequence)
     {
-    case '"':  success = string_builder_append(builder, '"');  break;
-    case '\\': success = string_builder_append(builder, '\\'); break;
-    case '/':  success = string_builder_append(builder, '/');  break;
-    case 'b':  success = string_builder_append(builder, '\b'); break;
-    case 'f':  success = string_builder_append(builder, '\f'); break;
-    case 'n':  success = string_builder_append(builder, '\n'); break;
-    case 'r':  success = string_builder_append(builder, '\r'); break;
-    case 't':  success = string_builder_append(builder, '\t'); break;
+    case '"':  return string_builder_append(builder, '"');  break;
+    case '\\': return string_builder_append(builder, '\\'); break;
+    case '/':  return string_builder_append(builder, '/');  break;
+    case 'b':  return string_builder_append(builder, '\b'); break;
+    case 'f':  return string_builder_append(builder, '\f'); break;
+    case 'n':  return string_builder_append(builder, '\n'); break;
+    case 'r':  return string_builder_append(builder, '\r'); break;
+    case 't':  return string_builder_append(builder, '\t'); break;
 
     case 'u':
-        consume(parser);
-        uint32_t code_point = parse_utf16_escape(parser);
-        if (parser->error)
-            return false;
+        {
+        uint32_t code_point;
+        if (parse_utf16_escape(parser, &code_point)) return true;
         return string_builder_append_utf_code_point(builder, code_point);
+        }
 
     default:
-        report_parsing_error(parser, "invalid escape sequence '%c'", parser->last_c);
-        return false;
+        report_parsing_error(parser, JSON_ERROR_ESCAPE_SEQUENCE, "invalid escape sequence '%c'", parser->last_c);
+        return true;
     }
-    consume(parser);
-    return success;
 }
 
 // Parses and returns a JSON quoted string.
-static char* get_quoted_string(json_parser *parser)
+static bool get_quoted_string(json_parser *parser, char **out)
 {
-    assert(parser->last_c == '"');
-
-    consume(parser);
+    if (expect(parser, '"'))
+        return NULL;
 
     string_builder builder = {0};
 
@@ -1146,48 +972,35 @@ static char* get_quoted_string(json_parser *parser)
         if (parser->last_c == '\\')
         {
             if (consume_escaped_character(parser, &builder))
-                continue;
-            
-            string_builder_free(&builder);
-            return NULL;
+                goto clean_up;
+            continue;
         }
 
-        if (!string_builder_append(&builder, parser->last_c))
+        if (string_builder_append(&builder, parser->last_c))
             goto alloc_error;
         consume(parser);
     }
 
-    if (!expect(parser, '"'))
-    {
-        string_builder_free(&builder);
-        return NULL;
-    }
+    if (expect(parser, '"'))
+        goto clean_up;
     
-    char *string = string_builder_build(&builder);
-    if (!string)
+    if (string_builder_build(&builder, out))
         goto alloc_error;
-
-    return string;
+    return false;
 
 alloc_error:
+    report_parsing_error(parser, JSON_ERROR_ALLOCATION, "couldn't reallocate string buffer");
+clean_up:
     string_builder_free(&builder);
-    report_parsing_error(parser, "couldn't reallocate buffer");
-    return NULL;
+    return true;
 }
 
 // Creates a JSON entry from a string.
-static json_entry* parse_string(json_parser *parser)
+static bool parse_string(json_parser *parser, json_value **out)
 {
-    assert(parser->last_c == '"');
-
-    char *string = get_quoted_string(parser);
-    if (parser->error)
-        return NULL;
-
-    json_entry *entry = malloc(sizeof(json_entry));
-    entry->type = JSON_STRING;
-    entry->string = string;
-    return entry;
+    char *string;
+    if (get_quoted_string(parser, &string)) return true;
+    return json_string_create_nocopy(string, out);
 }
 
 // Checks if character can be part of a JSON identifier.
@@ -1197,29 +1010,34 @@ static bool is_part_of_identifier(int c)
 }
 
 // Parses JSON identifiers (null, true, false).
-static json_entry* parse_identifier(json_parser *parser)
+static bool parse_identifier(json_parser *parser, json_value **out)
 {
-    assert(isalpha(parser->last_c));
-
-    char *buffer = get_string(parser, is_part_of_identifier);
-    if (parser->error)
+    char *buffer;
+    if (get_string(parser, is_part_of_identifier, &buffer))
         return NULL;
 
-    json_entry *entry;
+    json_error error;
     if (!strcmp(buffer, "null"))
-        entry = json_new_null();
+        error = json_null_create(out);
     else if (!strcmp(buffer, "true"))
-        entry = json_new_bool(true);
+        error = json_bool_create(true, out);
     else if (!strcmp(buffer, "false"))
-        entry = json_new_bool(false);
+        error = json_bool_create(false, out);
     else
     {
-        report_parsing_error(parser, "unknown identifier '%s'", buffer);
-        return NULL;
+        free(buffer);
+        report_parsing_error(parser, JSON_ERROR_UNEXPECTED_IDENTIFIER, "unknown identifier '%s'", buffer);
+        return true;
+    }
+    
+    free(buffer);
+    if (error != JSON_SUCCESS)
+    {
+        report_parsing_error(parser, error, "failed to create identifier '%s' entry", buffer);
+        return true;
     }
 
-    free(buffer);
-    return entry;
+    return false;
 }
 
 // Checks if character can be part of a number.
@@ -1229,51 +1047,53 @@ static bool is_part_of_number(int c)
 }
 
 // Converts a string of digits (and other characters) into a JSON number entry.
-static json_entry* parse_number(json_parser *parser)
+static bool parse_number(json_parser *parser, json_value **out)
 {
-    char *buffer = get_string(parser, is_part_of_number);
-    if (parser->error)
+    char *buffer;
+    if (get_string(parser, is_part_of_number, &buffer))
         return NULL;
 
     char *number_end;
     double number = strtod(buffer, &number_end);
     char final_char = *number_end;
-    free(buffer);
-    if (final_char != '\0' || errno == ERANGE)
+    if (final_char != '\0')
     {
-        report_parsing_error(parser, "invalid number '%s'", buffer);
-        return NULL;
+        report_parsing_error(parser, JSON_ERROR_NUMBER_FORMAT, "invalid number format '%s'", buffer);
+        goto clean_up;
     }
+    if (errno == ERANGE)
+    {
+        report_parsing_error(parser, JSON_ERROR_NUMBER_FORMAT, "number '%s' out of range", buffer);
+        goto clean_up;
+    }
+    free(buffer);
 
-    json_entry *entry = malloc(sizeof(json_entry));
-    entry->type = JSON_NUMBER;
-    entry->number = number;
-    return entry;
+    return json_number_create(number, out);
+
+clean_up:
+    free(buffer);
+    return true;
 }
 
 // Parses a JSON array.
-static json_entry* parse_array(json_parser *parser)
+static bool parse_array(json_parser *parser, json_value **out)
 {
-    assert(parser->last_c == '[');
-
-    consume(parser);
-    skip_blank(parser);
+    if (expect(parser, '['))
+        return true;
 
     json_array *array_head = NULL;
     json_array *array_tail = NULL;
     while (parser->last_c != ']' && parser->last_c != EOF)
     {
-        if (array_head &&
-            !expect(parser, ','))
+        if (array_head && expect(parser, ','))
             goto clean_up;
 
-        json_entry *this_entry = parse_entry(parser);
-        if (parser->error)
+        json_value *this_entry;
+        if (parse_entry(parser, &this_entry))
             goto clean_up;
 
         json_array *new_array = malloc(sizeof(json_array));
         new_array->entry = this_entry;
-        new_array->next = NULL;
         
         if (!array_head)
             array_head = new_array;
@@ -1281,147 +1101,142 @@ static json_entry* parse_array(json_parser *parser)
             array_tail->next = new_array;
         array_tail = new_array;
     }
+    array_tail->next = NULL;
     
-    if (!expect(parser, ']'))
+    if (expect(parser, ']'))
         goto clean_up;
 
-    json_entry *new_entry = malloc(sizeof(json_entry));
-    new_entry->type = JSON_ARRAY;
-    new_entry->array = array_head;
-    return new_entry;
+    if (json_array_create(out))
+        goto clean_up;
+
+    (*out)->array = array_head;
+    return false;
 
 clean_up:
     free_array(array_head);
-    return NULL;
+    return true;
 }
 
 // Parses a JSON object.
-static json_entry* parse_object(json_parser *parser)
+static bool parse_object(json_parser *parser, json_value **out)
 {
-    assert(parser->last_c == '{');
-
-    consume(parser);
-    skip_blank(parser);
+    if (expect(parser, '{'))
+        return true;
 
     json_object *object_head = NULL;
     json_object *object_tail = NULL;
     while (parser->last_c != '}' && parser->last_c != EOF)
     {
-        if (object_head &&
-            !expect(parser, ','))
+        if (object_head && expect(parser, ','))
             goto clean_up;
 
-        char *key_string = get_quoted_string(parser);
-        if (parser->error)
+        char *key_string;
+        if (get_quoted_string(parser, &key_string))
             goto clean_up;
 
-        if (!expect(parser, ':'))
+        if (expect(parser, ':'))
             goto clean_up;
 
-        json_entry *this_entry = parse_entry(parser);
-        if (!this_entry)
+        json_value *this_entry;
+        if (parse_entry(parser, &this_entry))
             goto clean_up;
 
         json_object *new_object = malloc(sizeof(json_object));
         new_object->key = key_string;
         new_object->entry = this_entry;
-        new_object->next = NULL;
-
+        
         if (!object_head)
             object_head = new_object;
         else
             object_tail->next = new_object;
         object_tail = new_object;
     }
+    object_tail->next = NULL;
 
-    if (!expect(parser, '}'))
+    if (expect(parser, '}'))
         goto clean_up;
 
-    json_entry *new_entry = malloc(sizeof(json_entry));
-    new_entry->type = JSON_OBJECT;
-    new_entry->object = object_head;
-    return new_entry;
+    if (json_object_create(out))
+        goto clean_up;
+
+    (*out)->object = object_head;
+    return false;
 
 clean_up:
     free_object(object_head);
-    return NULL;
+    return true;
 }
 
 // Determines the JSON type and parse the corresponding entry.
-static json_entry* parse_entry(json_parser *parser)
+static bool parse_entry(json_parser *parser, json_value **out)
 {
     parser->depth++;
-    if (parser->depth > MAX_DEPTH)
+    if (parser->depth > parser->options->max_depth)
     {
-        report_parsing_error(parser, "maximum depth (%zu) exceeded", MAX_DEPTH);
-        return NULL;
+        report_parsing_error(parser, JSON_ERROR_MAX_DEPTH, "maximum depth (%zu) exceeded", parser->options->max_depth);
+        return true;
     }
 
-    json_entry *entry;
+    bool error = true;
     if (parser->last_c == '[')
-        entry = parse_array(parser);
+        error = parse_array(parser, out);
     else if (parser->last_c == '{')
-        entry = parse_object(parser);
+        error = parse_object(parser, out);
     else if (parser->last_c == '"')
-        entry = parse_string(parser);
+        error = parse_string(parser, out);
     else if (isalpha(parser->last_c))
-        entry = parse_identifier(parser);
+        error = parse_identifier(parser, out);
     else if (isdigit(parser->last_c) || parser->last_c == '-')
-        entry = parse_number(parser);
+        error = parse_number(parser, out);
     else
-    {
-        entry = NULL;
-        report_parsing_error(parser, "unexpected character '%c'", parser->last_c);
-    }
+        report_parsing_error(parser, JSON_ERROR_UNEXPECTED_CHARACTER, "unexpected character '%c'", parser->last_c);
 
     parser->depth--;
 
-    return entry;
+    return error;
 }
 
 // Main entry point for parsing a JSON input.
-static json_entry *parse(json_parser *parser)
+static json_error parse(json_parser *parser, json_value **out)
 {
     parser->line = 1;
     parser->column = 0;
     parser->depth = 0;
-    parser->error = false;
+    parser->error = JSON_SUCCESS;
 
     consume(parser);
     skip_blank(parser);
 
     if (parser->last_c == EOF)
-        return NULL;
-
-    json_entry *root = parse_entry(parser);
-    if (!parser->error && parser->last_c != EOF)
-        report_parsing_error(parser, "expected end of file, found '%c'", parser->last_c);
-
-    if (parser->error)
     {
-        json_free(root);
-        return NULL;
+        *out = NULL;
+        return JSON_SUCCESS;
     }
 
-    return root;
+    json_value *root = NULL;
+    if (parse_entry(parser, &root))
+        goto clean_up;
+
+    if (parser->last_c != EOF)
+    {
+        report_parsing_error(parser, JSON_ERROR_UNEXPECTED_CHARACTER,
+            "expected end of file, found '%c'", parser->last_c);
+        goto clean_up;
+    }
+
+    *out = root;
+    return JSON_SUCCESS;
+
+clean_up:
+    if (root)
+        json_free(root);
+    return parser->error;
 }
 
 // --------------------
 // Input Source Functions
 // --------------------
 
-static void default_parse_error_callback(size_t line, size_t column, const char *message, void *user_data)
-{
-    (void)user_data;
-    fprintf(stderr, "JSON parsing error at line %zu, column %zu: %s\n", line, column, message);
-}
-
-static const json_parse_options DEFAULT_PARSE_OPTIONS = {
-    .error_callback = default_parse_error_callback,
-    .user_data = NULL
-};
-
-// Gets next character from a string.
 static int getc_from_string(json_parser *parser)
 {
     const char *string = parser->input_string;
@@ -1431,39 +1246,36 @@ static int getc_from_string(json_parser *parser)
     return *string;
 }
 
-json_entry* json_parse_string_ex(const char *string, const json_parse_options *options)
+json_error json_parse_string(const char *string, json_value **value, const json_parse_options *options)
 {
-    if (!string)
-        return NULL;
-
-    if (!options)
-        options = &DEFAULT_PARSE_OPTIONS;
+    if (!value) return JSON_ERROR_NULL;
+    if (!options) options = &JSON_DEFAULT_PARSE_OPTIONS;
 
     json_parser parser = {
         .input_string = string,
         .getc = getc_from_string,
         .options = options
     };
-    json_entry *root = parse(&parser);
 
-    return root;
+    if (!string)
+    {
+        report_parsing_error(&parser, JSON_ERROR_NULL, "string is NULL");
+        return JSON_ERROR_NULL;
+    }
+
+    return parse(&parser, value);
 }
 
-json_entry* json_parse_string(const char *string)
-{
-    return json_parse_string_ex(string, NULL);
-}
 
-// Gets next character from a file stream.
 static int getc_from_file(json_parser *parser)
 {
     return fgetc(parser->input_file);
 }
 
-json_entry* json_parse_file_ex(FILE *file, const json_parse_options *options)
+json_error json_parse_file(FILE *file, json_value **value, const json_parse_options *options)
 {
-    if (!options)
-        options = &DEFAULT_PARSE_OPTIONS;
+    if (!value) return JSON_ERROR_NULL;
+    if (!options) options = &JSON_DEFAULT_PARSE_OPTIONS;
     
     json_parser parser = {
         .input_file = file,
@@ -1473,16 +1285,284 @@ json_entry* json_parse_file_ex(FILE *file, const json_parse_options *options)
 
     if (!file)
     {
-        report_parsing_error(&parser, "file is NULL");
-        return NULL;
+        report_parsing_error(&parser, JSON_ERROR_NULL, "file is NULL");
+        return JSON_ERROR_NULL;
     }
 
-    json_entry *root = parse(&parser);
-
-    return root;
+    return parse(&parser, value);
 }
 
-json_entry* json_parse_file(FILE *file)
+// --------------------
+// JSON Printing Functions
+// --------------------
+
+const json_format_options JSON_DEFAULT_FORMAT_OPTIONS = {
+    .error_info = NULL,
+    .indent_size = 2,
+    .max_depth = DEFAULT_MAX_DEPTH
+};
+
+typedef struct json_serializer {
+    const json_format_options *options;
+    json_error_info *error_info;
+
+    union
+    {
+        FILE *output_file;
+        string_builder *output_builder;
+    };
+    void (*putc)(struct json_serializer *serializer, char c);
+    void (*puts)(struct json_serializer *serializer, const char *str);
+    void (*printf)(struct json_serializer *serializer, const char *format, ...);
+
+    size_t depth;
+    json_error error;
+} json_serializer;
+
+static void serialize_value(json_serializer *serializer, const json_value *entry);
+
+static void report_serialization_error(json_serializer *serializer, json_error error_type, const char *error_fmt, ...)
 {
-    return json_parse_file_ex(file, NULL);
+    serializer->error = error_type;
+
+    if (!serializer->error_info) return;
+    serializer->error_info->error = error_type;
+
+    va_list args, args_copy;
+    va_start(args, error_fmt);
+
+    va_copy(args_copy, args);
+    int size = vsnprintf(NULL, 0, error_fmt, args_copy);
+    va_end(args_copy);
+    if (size < 0)
+    {
+        va_end(args);
+        strcpy(serializer->error_info->message, "invalid error message format");
+        return;
+    }
+
+    vsnprintf(serializer->error_info->message, 256, error_fmt, args);
+    va_end(args);
+}
+
+// Writes indentation spaces to the file.
+static void serialize_indent(json_serializer *serializer)
+{
+    size_t indent = serializer->options->indent_size;
+    if (indent == 0) return;
+
+    serializer->putc(serializer, '\n');
+    for (indent *= serializer->depth; indent != 0; --indent)
+        serializer->putc(serializer, ' ');
+}
+
+// Prints a JSON array with proper formatting.
+static void serialize_array(json_serializer *serializer, const json_array *array)
+{
+    serializer->putc(serializer, '[');
+
+    serializer->depth++;
+    const json_array *entry = array;
+    while (entry)
+    {
+        serialize_indent(serializer);
+        serialize_value(serializer, entry->entry);
+
+        entry = entry->next;
+        if (entry)
+            serializer->putc(serializer, ',');
+    }
+    serializer->depth--;
+
+    serialize_indent(serializer);
+    serializer->putc(serializer, ']');
+}
+
+// Writes a JSON string escaping special characters.
+static void serialize_escape_string(json_serializer *serializer, char *str)
+{
+    for (; *str != '\0'; ++str)
+    {
+        if ((unsigned char)*str < 0x20 || *str == 0x7F)
+        {
+            serializer->printf(serializer, "\\u00%02X", *str & 0xFF);
+            continue;
+        }
+
+        switch (*str)
+        {
+        case '"':  serializer->puts(serializer, "\\\""); break;
+        case '\\': serializer->puts(serializer, "\\\\"); break;
+        case '/':  serializer->puts(serializer, "\\/"); break;
+        case '\b': serializer->puts(serializer, "\\b"); break;
+        case '\f': serializer->puts(serializer, "\\f"); break;
+        case '\n': serializer->puts(serializer, "\\n"); break;
+        case '\r': serializer->puts(serializer, "\\r"); break;
+        case '\t': serializer->puts(serializer, "\\t"); break;
+        default:   serializer->putc(serializer, *str); break;
+        }
+    }
+}
+
+// Prints a JSON object with proper formatting.
+static void serialize_object(json_serializer *serializer, const json_object *object)
+{
+    serializer->putc(serializer, '{');
+
+    serializer->depth++;
+    const json_object *entry = object;
+    while (entry)
+    {
+        serialize_indent(serializer);
+
+        serializer->putc(serializer, '"');
+        serialize_escape_string(serializer, entry->key);
+        serializer->puts(serializer, "\": ");
+        serialize_value(serializer, entry->entry);
+
+        entry = entry->next;
+        if (entry)
+            serializer->putc(serializer, ',');
+    }
+    serializer->depth--;
+
+    serialize_indent(serializer);
+    serializer->putc(serializer, '}');
+}
+
+static void serialize_value(json_serializer *serializer, const json_value *entry)
+{
+    if (!entry) return;
+
+    if (serializer->depth > serializer->options->max_depth)
+    {
+        serializer->puts(serializer, "null");
+        report_serialization_error(serializer, JSON_ERROR_MAX_DEPTH, "maximum depth exceeded");
+        return;
+    }
+
+    switch (entry->type)
+    {
+    case JSON_NULL:
+        serializer->puts(serializer, "null");
+        break;
+
+    case JSON_NUMBER:
+        serializer->printf(serializer, "%g", entry->number);
+        break;
+
+    case JSON_STRING:
+        serializer->putc(serializer, '"');
+        serialize_escape_string(serializer, entry->string);
+        serializer->putc(serializer, '"');
+        break;
+
+    case JSON_BOOL:
+        serializer->puts(serializer, entry->boolean ? "true" : "false");
+        break;
+
+    case JSON_ARRAY:
+        serialize_array(serializer, entry->array);
+        break;
+
+    case JSON_OBJECT:
+        serialize_object(serializer, entry->object);
+        break;
+    }
+}
+
+static void putc_to_file(json_serializer *serializer, char c)
+{
+    fputc(c, serializer->output_file);
+}
+
+static void puts_to_file(json_serializer *serializer, const char *str)
+{
+    fputs(str, serializer->output_file);
+}
+
+static void printf_to_file(json_serializer *serializer, const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    vfprintf(serializer->output_file, format, args);
+    va_end(args);
+}
+
+json_error serialize(json_serializer *serializer, const json_value *entry)
+{
+    serializer->depth = 0;
+    serializer->error = JSON_SUCCESS;
+    serialize_value(serializer, entry);
+    if (serializer->options->indent_size != 0)
+        serializer->putc(serializer, '\n');
+    return serializer->error;
+}
+
+json_error json_serialize_to_file(const json_value *entry, FILE *file, const json_format_options *options)
+{
+    if (!options) options = &JSON_DEFAULT_FORMAT_OPTIONS;
+
+    json_serializer serializer = {
+        .options = options,
+        .putc = putc_to_file,
+        .puts = puts_to_file,
+        .printf = printf_to_file,
+        .output_file = file
+    };
+
+    if (!file)
+    {
+        report_serialization_error(&serializer, JSON_ERROR_NULL, "file is NULL");
+        return JSON_ERROR_NULL;
+    }
+
+    return serialize(&serializer, entry);
+}
+
+static void putc_to_string(json_serializer *serializer, char c)
+{
+    string_builder_append(serializer->output_builder, c);
+}
+
+static void puts_to_string(json_serializer *serializer, const char *str)
+{
+    string_builder_append_string(serializer->output_builder, str);
+}
+
+static void printf_to_string(json_serializer *serializer, const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    string_builder_append_format(serializer->output_builder, format, args);
+    va_end(args);
+}
+
+json_error json_serialize_to_string(const json_value *entry, char **dst, const json_format_options *options)
+{
+    if (!dst) return JSON_ERROR_NULL;
+    if (!options) options = &JSON_DEFAULT_FORMAT_OPTIONS;
+
+    string_builder builder = {0};
+    json_serializer serializer = {
+        .options = options,
+        .putc = putc_to_string,
+        .puts = puts_to_string,
+        .printf = printf_to_string,
+        .output_builder = &builder
+    };
+
+    if (serialize(&serializer, entry) != JSON_SUCCESS)
+        goto clean_up;
+
+    if (string_builder_build(&builder, dst))
+    {
+        report_serialization_error(&serializer, JSON_ERROR_ALLOCATION, "couldn't reallocate string buffer");
+        goto clean_up;
+    }
+    return JSON_SUCCESS;
+
+clean_up:
+    string_builder_free(&builder);
+    return serializer.error;
 }
