@@ -200,12 +200,12 @@ void test_array_errors()
     error = json_array_set(array, 0, NULL);
     ASSERT_EQUAL_INT("Null input pointer causes error", JSON_ERROR_NULL, error);
     error = json_array_set(array, 0, item);
-    ASSERT_EQUAL_INT("Out of bounds access returns error", JSON_ERROR_INDEX_OUT_OF_BOUNDS, error);
+    ASSERT_EQUAL_INT("Out of bounds modification returns error", JSON_ERROR_INDEX_OUT_OF_BOUNDS, error);
 
     error = json_array_remove(NULL, 0, &item);
     ASSERT_EQUAL_INT("Null input pointer causes error", JSON_ERROR_NULL, error);
     error = json_array_remove(array, 0, &item);
-    ASSERT_EQUAL_INT("Out of bounds access returns error", JSON_ERROR_INDEX_OUT_OF_BOUNDS, error);
+    ASSERT_EQUAL_INT("Out of bounds removal returns error", JSON_ERROR_INDEX_OUT_OF_BOUNDS, error);
     
     json_free(array);
     json_free(item);

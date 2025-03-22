@@ -204,8 +204,8 @@ const char* json_error_string(json_error code)
 // --------------------
 
 typedef struct json_array {
-    struct json_array *next;
-    json_value *entry;
+    size_t length;
+    json_value *entry[];
 } json_array;
 
 typedef struct json_object {
@@ -311,8 +311,17 @@ json_error json_array_create(json_value **out)
     json_value *entry = malloc(sizeof(json_value));
     if (!entry) return JSON_ERROR_ALLOCATION;
 
+    json_array *array = malloc(sizeof(json_array));
+    if (!array)
+    {
+        free(entry);
+        return JSON_ERROR_ALLOCATION;
+    }
+
     *entry = (json_value) {0};
     entry->type = JSON_ARRAY;
+    entry->array = array;
+    array->length = 0;
     *out = entry;
     return JSON_SUCCESS;
 }
@@ -341,30 +350,33 @@ json_error json_clone(const json_value *entry, json_value **out)
 
     case JSON_ARRAY:
     {
-        json_value *array;
-        json_error error = json_array_create(&array);
-        if (error) return error;
+        json_value *new_entry = malloc(sizeof(json_value));
+        if (!new_entry) return JSON_ERROR_ALLOCATION;
 
-        json_array *current = entry->array;
-        while (current)
+        json_array *new_array = malloc(sizeof(json_array) + entry->array->length * sizeof(json_value*));
+        if (!new_array)
+        {
+            free(new_entry);
+            return JSON_ERROR_ALLOCATION;
+        }
+
+        new_entry->type = JSON_ARRAY;
+        new_entry->array = new_array;
+        new_array->length = entry->array->length;
+
+        for (size_t i = 0; i < new_array->length; ++i)
         {
             json_value *cloned_entry;
-            error = json_clone(current->entry, &cloned_entry);
+            json_error error = json_clone(entry->array->entry[i], &cloned_entry);
             if (error)
             {
-                json_free(array);
+                json_free(new_entry);
                 return error;
             }
-            error = json_array_append(array, cloned_entry);
-            if (error)
-            {
-                json_free(cloned_entry);
-                json_free(array);
-                return error;
-            }
-            current = current->next;
+            new_array->entry[i] = cloned_entry;
         }
-        *out = array;
+
+        *out = new_entry;
         return JSON_SUCCESS;
     }
 
@@ -402,13 +414,9 @@ json_error json_clone(const json_value *entry, json_value **out)
 
 static void free_array(json_array *array)
 {
-    while (array)
-    {
-        json_array *next = array->next;
-        json_free(array->entry);
-        free(array);
-        array = next;
-    }
+    for (size_t i = 0; i < array->length; ++i)
+        json_free(array->entry[i]);
+    free(array);
 }
 
 static void free_object(json_object *object)
@@ -534,21 +542,27 @@ json_error json_change_to_string_nocopy(json_value *entry, char *string)
     return JSON_SUCCESS;
 }
 
+json_error json_change_to_array(json_value *entry)
+{
+    if (!entry) return JSON_ERROR_NULL;
+
+    json_array *array = malloc(sizeof(json_array));
+    if (!array) return JSON_ERROR_ALLOCATION;
+
+    free_content(entry);
+    *entry = (json_value) {0};
+    entry->type = JSON_ARRAY;
+    entry->array = array;
+    array->length = 0;
+    return JSON_SUCCESS;
+}
+
 json_error json_change_to_object(json_value *entry)
 {
     if (!entry) return JSON_ERROR_NULL;
     free_content(entry);
     *entry = (json_value) {0};
     entry->type = JSON_OBJECT;
-    return JSON_SUCCESS;
-}
-
-json_error json_change_to_array(json_value *entry)
-{
-    if (!entry) return JSON_ERROR_NULL;
-    free_content(entry);
-    *entry = (json_value) {0};
-    entry->type = JSON_ARRAY;
     return JSON_SUCCESS;
 }
 
@@ -561,10 +575,7 @@ json_error json_array_length(const json_value *array, size_t *out)
     if (!array || !out) return JSON_ERROR_NULL;
     CHECK_TYPE(array, JSON_ARRAY);
 
-    size_t count = 0;
-    for (json_array *current = array->array; current; current = current->next)
-        ++count;
-    *out = count;
+    *out = array->array->length;
     return JSON_SUCCESS;
 }
 
@@ -572,13 +583,9 @@ json_error json_array_get(const json_value *array, size_t index, json_value **ou
 {
     if (!array || !out) return JSON_ERROR_NULL;
     CHECK_TYPE(array, JSON_ARRAY);
+    if (index >= array->array->length) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
 
-    json_array *current = array->array;
-    for (; index != 0 && current; --index)
-        current = current->next;
-
-    if (!current) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
-    *out = current->entry;
+    *out = array->array->entry[index];
     return JSON_SUCCESS;
 }
 
@@ -586,14 +593,11 @@ json_error json_array_set(json_value *array, size_t index, json_value *value)
 {
     if (!array || !value) return JSON_ERROR_NULL;
     CHECK_TYPE(array, JSON_ARRAY);
+    if (index >= array->array->length) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
 
-    json_array *current = array->array;
-    for (; index != 0 && current; --index)
-        current = current->next;
-
-    if (!current) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
-    json_free(current->entry);
-    current->entry = value;
+    json_value **array_slot = &array->array->entry[index];
+    json_free(*array_slot);
+    *array_slot = value;
     return JSON_SUCCESS;
 }
 
@@ -602,23 +606,11 @@ json_error json_array_append(json_value *array, json_value *value)
     if (!array || !value) return JSON_ERROR_NULL;
     CHECK_TYPE(array, JSON_ARRAY);
 
-    json_array *new_array_entry = malloc(sizeof(json_array));
-    if (!new_array_entry) return JSON_ERROR_ALLOCATION;
-    
-    new_array_entry->entry = value;
-    new_array_entry->next = NULL;
+    json_array *new_array = realloc(array->array, sizeof(json_array) + (array->array->length + 1) * sizeof(json_value*));
+    if (!new_array) return JSON_ERROR_ALLOCATION;
 
-    json_array *first_entry = array->array;
-    if (!first_entry)
-    {
-        array->array = new_array_entry;
-        return JSON_SUCCESS;
-    }
-    
-    json_array *last_entry = NULL;
-    for (json_array *entry = first_entry; entry; entry = entry->next)
-        last_entry = entry;
-    last_entry->next = new_array_entry;
+    array->array = new_array;
+    new_array->entry[new_array->length++] = value;
     return JSON_SUCCESS;
 }
 
@@ -626,54 +618,45 @@ json_error json_array_insert(json_value *array, size_t index, json_value *value)
 {
     if (!array || !value) return JSON_ERROR_NULL;
     CHECK_TYPE(array, JSON_ARRAY);
+    if (index > array->array->length) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
 
-    json_array *prev = NULL;
-    json_array *current = array->array;
-    for (; index != 0 && current; --index)
-    {
-        prev = current;
-        current = current->next;
-    }
+    json_array *new_array = realloc(array->array, sizeof(json_array) + (array->array->length + 1) * sizeof(json_value*));
+    if (!new_array) return JSON_ERROR_ALLOCATION;
 
-    if (index != 0) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
-
-    json_array *new_array_entry = malloc(sizeof(json_array));
-    if (!new_array_entry) return JSON_ERROR_ALLOCATION;
-    new_array_entry->entry = value;
-    new_array_entry->next = current;
-
-    if (prev)
-        prev->next = new_array_entry;
-    else
-        array->array = new_array_entry;
+    if (index < new_array->length)
+        memmove(new_array->entry + index + 1, new_array->entry + index, (new_array->length - index) * sizeof(json_value*));
+    new_array->entry[index] = value;
+    new_array->length++;
     return JSON_SUCCESS;
 }
 
-json_error json_array_remove(json_value *array, size_t index, json_value **out)
+json_error json_array_remove(json_value *array_value, size_t index, json_value **out)
 {
-    if (!array) return JSON_ERROR_NULL;
-    CHECK_TYPE(array, JSON_ARRAY);
+    if (!array_value) return JSON_ERROR_NULL;
+    CHECK_TYPE(array_value, JSON_ARRAY);
+    if (index >= array_value->array->length) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
 
-    json_array *prev = NULL;
-    json_array *current = array->array;
-    for (; index != 0 && current; --index)
+    json_value *removed = array_value->array->entry[index];
+    if (index < array_value->array->length - 1)
+        memmove(array_value->array->entry + index, array_value->array->entry + index + 1, (array_value->array->length - index - 1) * sizeof(json_value*));
+
+    json_array *new_array = realloc(array_value->array, sizeof(json_array) + (array_value->array->length - 1) * sizeof(json_value*));
+    if (!new_array)
     {
-        prev = current;
-        current = current->next;
+        // Reinsert removed entry if reallocation fails.
+        if (index < array_value->array->length - 1)
+            memmove(array_value->array->entry + index + 1, array_value->array->entry + index, (array_value->array->length - index - 1) * sizeof(json_value*));
+        array_value->array->entry[array_value->array->length - 1] = removed;
+        return JSON_ERROR_ALLOCATION;
     }
 
-    if (!current) return JSON_ERROR_INDEX_OUT_OF_BOUNDS;
-
-    if (prev)
-        prev->next = current->next;
-    else
-        array->array = current->next;
+    array_value->array->length--;
 
     if (out)
-        *out = current->entry;
+        *out = removed;
     else
-        json_free(current->entry);
-    free(current);
+        json_free(removed);
+
     return JSON_SUCCESS;
 }
 
@@ -1151,39 +1134,36 @@ static bool parse_array(json_parser *parser, json_value **out)
     if (expect(parser, '['))
         return true;
 
-    json_array *array_head = NULL;
-    json_array *array_tail = NULL;
+    json_value *array_value;
+    json_error error = json_array_create(&array_value);
+    if (error)
+    {
+        report_parsing_error(parser, error, "failed to create array entry");
+        return true;
+    }
+
+    bool first_entry = true;
     while (parser->last_c != ']' && parser->last_c != EOF)
     {
-        if (array_head && expect(parser, ','))
+        if (!first_entry && expect(parser, ','))
             goto clean_up;
+        first_entry = false;
 
         json_value *this_entry;
         if (parse_entry(parser, &this_entry))
             goto clean_up;
 
-        json_array *new_array = malloc(sizeof(json_array));
-        new_array->entry = this_entry;
-        
-        if (!array_head)
-            array_head = new_array;
-        else
-            array_tail->next = new_array;
-        array_tail = new_array;
+        json_array_append(array_value, this_entry);
     }
-    array_tail->next = NULL;
     
     if (expect(parser, ']'))
         goto clean_up;
 
-    if (json_array_create(out))
-        goto clean_up;
-
-    (*out)->array = array_head;
+    *out = array_value;
     return false;
 
 clean_up:
-    free_array(array_head);
+    json_free(array_value);
     return true;
 }
 
@@ -1433,14 +1413,11 @@ static void serialize_array(json_serializer *serializer, const json_array *array
 
     serializer->depth++;
     const json_array *entry = array;
-    while (entry)
+    for (size_t i = 0; i < array->length; ++i)
     {
+        if (i > 0) serializer->putc(serializer, ',');
         serialize_indent(serializer);
-        serialize_value(serializer, entry->entry);
-
-        entry = entry->next;
-        if (entry)
-            serializer->putc(serializer, ',');
+        serialize_value(serializer, entry->entry[i]);
     }
     serializer->depth--;
 
@@ -1481,13 +1458,14 @@ static void serialize_object(json_serializer *serializer, const json_object *obj
 
     serializer->depth++;
     const json_object *entry = object;
+    bool is_compact = serializer->options->indent_size == 0;
     while (entry)
     {
         serialize_indent(serializer);
 
         serializer->putc(serializer, '"');
         serialize_escape_string(serializer, entry->key);
-        serializer->puts(serializer, "\": ");
+        serializer->puts(serializer, is_compact ? "\":" : "\": ");
         serialize_value(serializer, entry->entry);
 
         entry = entry->next;
