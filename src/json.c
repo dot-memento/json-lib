@@ -209,9 +209,9 @@ typedef struct json_array {
 } json_array;
 
 typedef struct json_object {
-    struct json_object *next;
-    char *key;
-    json_value *entry;
+    size_t size;
+    char **keys;
+    json_value *entry[];
 } json_object;
 
 typedef struct json_value {
@@ -333,8 +333,18 @@ json_error json_object_create(json_value **out)
     json_value *entry = malloc(sizeof(json_value));
     if (!entry) return JSON_ERROR_ALLOCATION;
 
+    json_object *object = malloc(sizeof(json_object));
+    if (!object)
+    {
+        free(entry);
+        return JSON_ERROR_ALLOCATION;
+    }
+
+    object->size = 0;
+    object->keys = NULL;
     *entry = (json_value) {0};
     entry->type = JSON_OBJECT;
+    entry->object = object;
     *out = entry;
     return JSON_SUCCESS;
 }
@@ -382,30 +392,53 @@ json_error json_clone(const json_value *entry, json_value **out)
 
     case JSON_OBJECT:
     {
-        json_value *object;
-        json_error error = json_object_create(&object);
-        if (error) return error;
+        json_value *new_entry = malloc(sizeof(json_value));
+        if (!new_entry) return JSON_ERROR_ALLOCATION;
 
-        json_object *current = entry->object;
-        while (current)
+        json_object *new_object = malloc(sizeof(json_object) + entry->object->size * sizeof(json_value*));
+        if (!new_object)
         {
-            json_value *cloned_entry;
-            error = json_clone(current->entry, &cloned_entry);
-            if (error)
-            {
-                json_free(object);
-                return error;
-            }
-            error = json_object_set(object, current->key, cloned_entry);
-            if (error)
-            {
-                json_free(cloned_entry);
-                json_free(object);
-                return error;
-            }
-            current = current->next;
+            free(new_entry);
+            return JSON_ERROR_ALLOCATION;
         }
-        *out = object;
+
+        if (entry->object->size)
+        {
+            new_object->keys = malloc(entry->object->size * sizeof(char*));
+            if (!new_object->keys)
+            {
+                free(new_object);
+                free(new_entry);
+                return JSON_ERROR_ALLOCATION;
+            }
+        }
+        else
+            new_object->keys = NULL;
+
+        new_entry->type = JSON_OBJECT;
+        new_entry->object = new_object;
+        new_object->size = entry->object->size;
+
+        for (size_t i = 0; i < new_object->size; ++i)
+        {
+            new_object->keys[i] = strdup(entry->object->keys[i]);
+            if (!new_object->keys[i])
+            {
+                json_free(new_entry);
+                return JSON_ERROR_ALLOCATION;
+            }
+
+            json_value *cloned_entry;
+            json_error error = json_clone(entry->object->entry[i], &cloned_entry);
+            if (error)
+            {
+                json_free(new_entry);
+                return error;
+            }
+            new_object->entry[i] = cloned_entry;
+        }
+
+        *out = new_entry;
         return JSON_SUCCESS;
     }
     }
@@ -421,14 +454,13 @@ static void free_array(json_array *array)
 
 static void free_object(json_object *object)
 {
-    while (object)
+    for (size_t i = 0; i < object->size; ++i)
     {
-        json_object *next = object->next;
-        json_free(object->entry);
-        free(object->key);
-        free(object);
-        object = next;
+        free(object->keys[i]);
+        json_free(object->entry[i]);
     }
+    free(object->keys);
+    free(object);
 }
 
 static void free_content(json_value *entry)
@@ -560,9 +592,16 @@ json_error json_change_to_array(json_value *entry)
 json_error json_change_to_object(json_value *entry)
 {
     if (!entry) return JSON_ERROR_NULL;
+
+    json_object *object = malloc(sizeof(json_object));
+    if (!object) return JSON_ERROR_ALLOCATION;
+
     free_content(entry);
+    object->size = 0;
+    object->keys = NULL;
     *entry = (json_value) {0};
     entry->type = JSON_OBJECT;
+    entry->object = object;
     return JSON_SUCCESS;
 }
 
@@ -640,16 +679,6 @@ json_error json_array_remove(json_value *array_value, size_t index, json_value *
     if (index < array_value->array->length - 1)
         memmove(array_value->array->entry + index, array_value->array->entry + index + 1, (array_value->array->length - index - 1) * sizeof(json_value*));
 
-    json_array *new_array = realloc(array_value->array, sizeof(json_array) + (array_value->array->length - 1) * sizeof(json_value*));
-    if (!new_array)
-    {
-        // Reinsert removed entry if reallocation fails.
-        if (index < array_value->array->length - 1)
-            memmove(array_value->array->entry + index + 1, array_value->array->entry + index, (array_value->array->length - index - 1) * sizeof(json_value*));
-        array_value->array->entry[array_value->array->length - 1] = removed;
-        return JSON_ERROR_ALLOCATION;
-    }
-
     array_value->array->length--;
 
     if (out)
@@ -669,10 +698,7 @@ json_error json_object_size(const json_value *object, size_t *out)
     if (!object || !out) return JSON_ERROR_NULL;
     CHECK_TYPE(object, JSON_OBJECT);
 
-    size_t count = 0;
-    for (json_object *current = object->object; current; current = current->next)
-        ++count;
-    *out = count;
+    *out = object->object->size;
     return JSON_SUCCESS;
 }
 
@@ -681,16 +707,15 @@ json_error json_object_has_key(const json_value *object, const char *key, bool *
     if (!object || !key || !out) return JSON_ERROR_NULL;
     CHECK_TYPE(object, JSON_OBJECT);
 
-    json_object *current = object->object;
-    while (current)
+    for (size_t i = 0; i < object->object->size; ++i)
     {
-        if (!strcmp(current->key, key))
+        if (!strcmp(object->object->keys[i], key))
         {
             *out = true;
             return JSON_SUCCESS;
         }
-        current = current->next;
     }
+
     *out = false;
     return JSON_SUCCESS;
 }
@@ -700,16 +725,15 @@ json_error json_object_get(const json_value *object, const char *key, json_value
     if (!object || !key || !out) return JSON_ERROR_NULL;
     CHECK_TYPE(object, JSON_OBJECT);
 
-    json_object *current = object->object;
-    while (current)
+    for (size_t i = 0; i < object->object->size; ++i)
     {
-        if (!strcmp(current->key, key))
+        if (!strcmp(object->object->keys[i], key))
         {
-            *out = current->entry;
+            *out = object->object->entry[i];
             return JSON_SUCCESS;
         }
-        current = current->next;
     }
+
     return JSON_ERROR_KEY_NOT_FOUND;
 }
 
@@ -718,37 +742,38 @@ json_error json_object_set(json_value *object, const char *key, json_value *valu
     if (!object || !key || !value) return JSON_ERROR_NULL;
     CHECK_TYPE(object, JSON_OBJECT);
 
-    json_object *prev = NULL;
-    json_object *current = object->object;
-    while (current)
+    for (size_t i = 0; i < object->object->size; ++i)
     {
-        if (!strcmp(current->key, key))
+        if (!strcmp(object->object->keys[i], key))
         {
-            json_free(current->entry);
-            current->entry = value;
+            json_free(object->object->entry[i]);
+            object->object->entry[i] = value;
             return JSON_SUCCESS;
         }
-        prev = current;
-        current = current->next;
     }
 
     char *key_copy = strdup(key);
     if (!key_copy) return JSON_ERROR_ALLOCATION;
 
-    json_object *new_object_entry = malloc(sizeof(json_object));
-    if (!new_object_entry)
+    json_object *new_object = realloc(object->object, sizeof(json_object) + (object->object->size + 1) * sizeof(json_value*));
+    if (!new_object)
     {
         free(key_copy);
         return JSON_ERROR_ALLOCATION;
     }
-    new_object_entry->entry = value;
-    new_object_entry->key = key_copy;
-    new_object_entry->next = NULL;
+    object->object = new_object;
 
-    if (prev)
-        prev->next = new_object_entry;
-    else
-        object->object = new_object_entry;
+    char **new_keys = realloc(new_object->keys, (object->object->size + 1) * sizeof(char*));
+    if (!new_keys)
+    {
+        free(key_copy);
+        return JSON_ERROR_ALLOCATION;
+    }
+
+    new_keys[new_object->size] = key_copy;
+    new_object->keys = new_keys;
+    new_object->entry[object->object->size] = value;
+    new_object->size++;
     return JSON_SUCCESS;
 }
 
@@ -757,28 +782,30 @@ json_error json_object_remove(json_value *object, const char *key, json_value **
     if (!object || !key) return JSON_ERROR_NULL;
     CHECK_TYPE(object, JSON_OBJECT);
 
-    json_object *prev = NULL;
-    json_object *current = object->object;
-    while (current)
+    for (size_t i = 0; i < object->object->size; ++i)
     {
-        if (!strcmp(current->key, key))
+        char *old_key = object->object->keys[i];
+        if (strcmp(old_key, key))
+            continue;
+        free(old_key);
+        
+        json_value *removed = object->object->entry[i];
+        if (i < object->object->size - 1)
         {
-            if (prev)
-                prev->next = current->next;
-            else
-                object->object = current->next;
-            
-            if (out)
-                *out = current->entry;
-            else
-                json_free(current->entry);
-            free(current->key);
-            free(current);
-            return JSON_SUCCESS;
+            memmove(object->object->keys + i, object->object->keys + i + 1, (object->object->size - i - 1) * sizeof(char*));
+            memmove(object->object->entry + i, object->object->entry + i + 1, (object->object->size - i - 1) * sizeof(json_value*));
         }
-        prev = current;
-        current = current->next;
+
+        object->object->size--;
+
+        if (out)
+            *out = removed;
+        else
+            json_free(removed);
+
+        return JSON_SUCCESS;
     }
+
     return JSON_ERROR_KEY_NOT_FOUND;
 }
 
@@ -1014,7 +1041,7 @@ static bool consume_escaped_character(json_parser *parser, string_builder *build
 static bool get_quoted_string(json_parser *parser, char **out)
 {
     if (expect(parser, '"'))
-        return NULL;
+        return true;
 
     string_builder builder = {0};
 
@@ -1067,7 +1094,7 @@ static bool parse_identifier(json_parser *parser, json_value **out)
 {
     char *buffer;
     if (get_string(parser, is_part_of_identifier, &buffer))
-        return NULL;
+        return true;
 
     json_error error;
     if (!strcmp(buffer, "null"))
@@ -1104,7 +1131,7 @@ static bool parse_number(json_parser *parser, json_value **out)
 {
     char *buffer;
     if (get_string(parser, is_part_of_number, &buffer))
-        return NULL;
+        return true;
 
     char *number_end;
     double number = strtod(buffer, &number_end);
@@ -1173,47 +1200,49 @@ static bool parse_object(json_parser *parser, json_value **out)
     if (expect(parser, '{'))
         return true;
 
-    json_object *object_head = NULL;
-    json_object *object_tail = NULL;
+    json_value *object_value;
+    json_error error = json_object_create(&object_value);
+    if (error)
+    {
+        report_parsing_error(parser, error, "failed to create object entry");
+        return true;
+    }
+
+    bool first_entry = true;
     while (parser->last_c != '}' && parser->last_c != EOF)
     {
-        if (object_head && expect(parser, ','))
+        if (!first_entry && expect(parser, ','))
             goto clean_up;
+        first_entry = false;
 
         char *key_string;
         if (get_quoted_string(parser, &key_string))
             goto clean_up;
 
         if (expect(parser, ':'))
+        {
+            free(key_string);
             goto clean_up;
+        }
 
         json_value *this_entry;
         if (parse_entry(parser, &this_entry))
+        {
+            free(key_string);
             goto clean_up;
+        }
 
-        json_object *new_object = malloc(sizeof(json_object));
-        new_object->key = key_string;
-        new_object->entry = this_entry;
-        
-        if (!object_head)
-            object_head = new_object;
-        else
-            object_tail->next = new_object;
-        object_tail = new_object;
+        json_object_set(object_value, key_string, this_entry);
     }
-    object_tail->next = NULL;
 
     if (expect(parser, '}'))
         goto clean_up;
 
-    if (json_object_create(out))
-        goto clean_up;
-
-    (*out)->object = object_head;
+    *out = object_value;
     return false;
 
 clean_up:
-    free_object(object_head);
+    json_free(object_value);
     return true;
 }
 
@@ -1459,19 +1488,17 @@ static void serialize_object(json_serializer *serializer, const json_object *obj
     serializer->depth++;
     const json_object *entry = object;
     bool is_compact = serializer->options->indent_size == 0;
-    while (entry)
+
+    for (size_t i = 0; i < object->size; ++i)
     {
+        if (i > 0) serializer->putc(serializer, ',');
         serialize_indent(serializer);
-
         serializer->putc(serializer, '"');
-        serialize_escape_string(serializer, entry->key);
+        serialize_escape_string(serializer, entry->keys[i]);
         serializer->puts(serializer, is_compact ? "\":" : "\": ");
-        serialize_value(serializer, entry->entry);
-
-        entry = entry->next;
-        if (entry)
-            serializer->putc(serializer, ',');
+        serialize_value(serializer, entry->entry[i]);
     }
+
     serializer->depth--;
 
     serialize_indent(serializer);
