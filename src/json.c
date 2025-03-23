@@ -492,7 +492,7 @@ json_error json_get_type(const json_value *entry, json_type *out)
     return JSON_SUCCESS;
 }
 
-json_error json_get_bool(const json_value *entry, bool *out)
+json_error json_bool_get(const json_value *entry, bool *out)
 {
     if (!entry || !out) return JSON_ERROR_NULL;
     CHECK_TYPE(entry, JSON_BOOL);
@@ -500,7 +500,7 @@ json_error json_get_bool(const json_value *entry, bool *out)
     return JSON_SUCCESS;
 }
 
-json_error json_get_number(const json_value *entry, double *out)
+json_error json_number_get(const json_value *entry, double *out)
 {
     if (!entry || !out) return JSON_ERROR_NULL;
     CHECK_TYPE(entry, JSON_NUMBER);
@@ -508,7 +508,7 @@ json_error json_get_number(const json_value *entry, double *out)
     return JSON_SUCCESS;
 }
 
-json_error json_get_string(const json_value *entry, const char **out)
+json_error json_string_get(const json_value *entry, const char **out)
 {
     if (!entry || !out) return JSON_ERROR_NULL;
     CHECK_TYPE(entry, JSON_STRING);
@@ -520,7 +520,7 @@ json_error json_get_string(const json_value *entry, const char **out)
 // JSON Setter API
 // --------------------
 
-json_error json_change_to_null(json_value *entry)
+json_error json_set_as_null(json_value *entry)
 {
     if (!entry) return JSON_ERROR_NULL;
     free_content(entry);
@@ -529,7 +529,7 @@ json_error json_change_to_null(json_value *entry)
     return JSON_SUCCESS;
 }
 
-json_error json_change_to_bool(json_value *entry, bool value)
+json_error json_set_as_bool(json_value *entry, bool value)
 {
     if (!entry) return JSON_ERROR_NULL;
     free_content(entry);
@@ -539,7 +539,7 @@ json_error json_change_to_bool(json_value *entry, bool value)
     return JSON_SUCCESS;
 }
 
-json_error json_change_to_number(json_value *entry, double value)
+json_error json_set_as_number(json_value *entry, double value)
 {
     if (!entry) return JSON_ERROR_NULL;
     free_content(entry);
@@ -549,7 +549,7 @@ json_error json_change_to_number(json_value *entry, double value)
     return JSON_SUCCESS;
 }
 
-json_error json_change_to_string(json_value *entry, const char *string)
+json_error json_set_as_string(json_value *entry, const char *string)
 {
     if (!entry || !string) return JSON_ERROR_NULL;
 
@@ -563,7 +563,7 @@ json_error json_change_to_string(json_value *entry, const char *string)
     return JSON_SUCCESS;
 }
 
-json_error json_change_to_string_nocopy(json_value *entry, char *string)
+json_error json_set_as_string_nocopy(json_value *entry, char *string)
 {
     if (!entry || !string) return JSON_ERROR_NULL;
 
@@ -574,7 +574,7 @@ json_error json_change_to_string_nocopy(json_value *entry, char *string)
     return JSON_SUCCESS;
 }
 
-json_error json_change_to_array(json_value *entry)
+json_error json_set_as_array(json_value *entry)
 {
     if (!entry) return JSON_ERROR_NULL;
 
@@ -589,7 +589,7 @@ json_error json_change_to_array(json_value *entry)
     return JSON_SUCCESS;
 }
 
-json_error json_change_to_object(json_value *entry)
+json_error json_set_as_object(json_value *entry)
 {
     if (!entry) return JSON_ERROR_NULL;
 

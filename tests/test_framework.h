@@ -124,40 +124,40 @@ char *strdup(const char *string)
 
 #define ASSERT_JSON_GET_BOOL(message, value, expected) do { \
     bool _bool_val; \
-    json_error _error = json_get_bool(value, &_bool_val); \
+    json_error _error = json_bool_get(value, &_bool_val); \
     ASSERT_JSON_SUCCESS(message" (error)", _error); \
     ASSERT_EQUAL_INT(message" (value)", expected, _bool_val); \
 } while (0)
 
 #define ASSERT_JSON_GET_NOT_BOOL(message, value) do { \
     bool _bool_val; \
-    json_error _error = json_get_bool(value, &_bool_val); \
+    json_error _error = json_bool_get(value, &_bool_val); \
     ASSERT_EQUAL_INT(message, JSON_ERROR_WRONG_TYPE, _error); \
 } while (0)
 
 #define ASSERT_JSON_GET_NUMBER(message, value, expected) do { \
     double _num_val; \
-    json_error _error = json_get_number(value, &_num_val); \
+    json_error _error = json_number_get(value, &_num_val); \
     ASSERT_JSON_SUCCESS(message" (error)", _error); \
     ASSERT_EQUAL_DOUBLE(message" (value)", expected, _num_val); \
 } while (0)
 
 #define ASSERT_JSON_GET_NOT_NUMBER(message, value) do { \
     double _num_val; \
-    json_error _error = json_get_number(value, &_num_val); \
+    json_error _error = json_number_get(value, &_num_val); \
     ASSERT_EQUAL_INT(message, JSON_ERROR_WRONG_TYPE, _error); \
 } while (0)
 
 #define ASSERT_JSON_GET_STRING(message, value, expected) do { \
     const char *_str_val; \
-    json_error _error = json_get_string(value, &_str_val); \
+    json_error _error = json_string_get(value, &_str_val); \
     ASSERT_JSON_SUCCESS(message" (error)", _error); \
     ASSERT_EQUAL_STRING(message" (value)", expected, _str_val); \
 } while (0)
 
 #define ASSERT_JSON_GET_NOT_STRING(message, value) do { \
     const char *_str_val; \
-    json_error _error = json_get_string(value, &_str_val); \
+    json_error _error = json_string_get(value, &_str_val); \
     ASSERT_EQUAL_INT(message, JSON_ERROR_WRONG_TYPE, _error); \
 } while (0)
 

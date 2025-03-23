@@ -72,7 +72,7 @@ void test_string_creation_and_access()
     ASSERT_JSON_GET_NOT_OBJECT("String value is not an object", value);
 
     const char *str_val;
-    error = json_get_string(value, &str_val);
+    error = json_string_get(value, &str_val);
 
     ASSERT_JSON_SUCCESS("Get string from value", error);
     ASSERT_NOT_EQUAL_PTR("String value is copied", test_str, str_val);
@@ -93,7 +93,7 @@ void test_string_nocopy_creation_and_access()
     ASSERT_JSON_GET_STRING("String value (nocopy) is correct", value, "No Copy String");
 
     const char *str_val;
-    error = json_get_string(value, &str_val);
+    error = json_string_get(value, &str_val);
 
     ASSERT_JSON_SUCCESS("Get string from value (nocopy)", error);
     ASSERT_EQUAL_PTR("String value (nocopy) is not copied", nocopy_str, str_val);
@@ -105,7 +105,7 @@ void test_change_to_null()
     json_value *value = NULL;
     json_bool_create(true, &value);
 
-    json_error error = json_change_to_null(value);
+    json_error error = json_set_as_null(value);
 
     ASSERT_JSON_SUCCESS("Change to null", error);
     ASSERT_JSON_TYPE("Null value has correct type", value, JSON_NULL);
@@ -117,7 +117,7 @@ void test_change_to_bool()
     json_value *value = NULL;
     json_null_create(&value);
 
-    json_error error = json_change_to_bool(value, true);
+    json_error error = json_set_as_bool(value, true);
 
     ASSERT_JSON_SUCCESS("Change to bool", error);
     ASSERT_JSON_TYPE("Bool value has correct type", value, JSON_BOOL);
@@ -130,7 +130,7 @@ void test_change_to_number()
     json_value *value = NULL;
     json_null_create(&value);
 
-    json_error error = json_change_to_number(value, 123.45);
+    json_error error = json_set_as_number(value, 123.45);
 
     ASSERT_JSON_SUCCESS("Change to number", error);
     ASSERT_JSON_TYPE("Number value has correct type", value, JSON_NUMBER);
@@ -144,7 +144,7 @@ void test_change_to_string()
     json_value *value = NULL;
     json_null_create(&value);
 
-    json_error error = json_change_to_string(value, test_str);
+    json_error error = json_set_as_string(value, test_str);
 
     ASSERT_JSON_SUCCESS("Change to string", error);
     ASSERT_JSON_TYPE("String value has correct type", value, JSON_STRING);
@@ -158,7 +158,7 @@ void test_change_to_string_nocopy()
     json_value *value = NULL;
     json_null_create(&value);
 
-    json_error error = json_change_to_string_nocopy(value, nocopy_str);
+    json_error error = json_set_as_string_nocopy(value, nocopy_str);
 
     ASSERT_JSON_SUCCESS("Change to string (nocopy)", error);
     ASSERT_JSON_TYPE("String value (nocopy) has correct type", value, JSON_STRING);
@@ -266,29 +266,29 @@ void test_null_errors_creation()
 void test_null_errors_access()
 {
     bool bool_val = true;
-    json_error error = json_get_bool(NULL, &bool_val);
+    json_error error = json_bool_get(NULL, &bool_val);
     ASSERT_EQUAL_INT("Null input pointer causes error", JSON_ERROR_NULL, error);
     ASSERT_EQUAL_INT("Bool value is unchanged", true, bool_val);
 
     double num_val = 420.05;
-    error = json_get_number(NULL, &num_val);
+    error = json_number_get(NULL, &num_val);
     ASSERT_EQUAL_INT("Null input pointer causes error", JSON_ERROR_NULL, error);
     ASSERT_EQUAL_DOUBLE("Number value is unchanged", 420.05, num_val);
 
     const char *str_val = "Unchanged";
-    error = json_get_string(NULL, &str_val);
+    error = json_string_get(NULL, &str_val);
     ASSERT_EQUAL_INT("Null input pointer causes error", JSON_ERROR_NULL, error);
     ASSERT_EQUAL_STRING("String value is unchanged", "Unchanged", str_val);
 
     json_value *value = (json_value*)0x12345678;
 
-    error = json_get_bool(value, NULL);
+    error = json_bool_get(value, NULL);
     ASSERT_EQUAL_INT("Null output pointer causes error", JSON_ERROR_NULL, error);
 
-    error = json_get_number(value, NULL);
+    error = json_number_get(value, NULL);
     ASSERT_EQUAL_INT("Null output pointer causes error", JSON_ERROR_NULL, error);
 
-    error = json_get_string(value, NULL);
+    error = json_string_get(value, NULL);
     ASSERT_EQUAL_INT("Null output pointer causes error", JSON_ERROR_NULL, error);
 }
 
@@ -297,28 +297,28 @@ void test_null_errors_modification()
     json_value *value;
     json_number_create(123.45, &value);
 
-    json_error error = json_change_to_null(NULL);
+    json_error error = json_set_as_null(NULL);
     ASSERT_EQUAL_INT("Null input pointer causes error", JSON_ERROR_NULL, error);
 
-    error = json_change_to_bool(NULL, true);
+    error = json_set_as_bool(NULL, true);
     ASSERT_EQUAL_INT("Null input pointer causes error", JSON_ERROR_NULL, error);
 
-    error = json_change_to_number(NULL, 42.5);
+    error = json_set_as_number(NULL, 42.5);
     ASSERT_EQUAL_INT("Null input pointer causes error", JSON_ERROR_NULL, error);
 
-    error = json_change_to_string(NULL, "test");
+    error = json_set_as_string(NULL, "test");
     ASSERT_EQUAL_INT("Null input pointer causes error", JSON_ERROR_NULL, error);
 
     char *nocopy_str = strdup("No Copy String");
-    error = json_change_to_string_nocopy(NULL, nocopy_str);
+    error = json_set_as_string_nocopy(NULL, nocopy_str);
     ASSERT_EQUAL_INT("Null input pointer causes error", JSON_ERROR_NULL, error);
     free(nocopy_str);
 
-    error = json_change_to_string(value, NULL);
+    error = json_set_as_string(value, NULL);
     ASSERT_EQUAL_INT("Null string pointer causes error", JSON_ERROR_NULL, error);
     ASSERT_JSON_GET_NUMBER("Value is unchanged", value, 123.45);
 
-    error = json_change_to_string_nocopy(value, NULL);
+    error = json_set_as_string_nocopy(value, NULL);
     ASSERT_EQUAL_INT("Null string pointer causes error", JSON_ERROR_NULL, error);
     ASSERT_JSON_GET_NUMBER("Value is unchanged", value, 123.45);
     free(value);

@@ -63,14 +63,14 @@ void test_serialization() {
     const char *str_val;
     error = json_object_get(parsed, "name", &check_value);
     ASSERT_JSON_SUCCESS("Get name from parsed object", error);
-    error = json_get_string(check_value, &str_val);
+    error = json_string_get(check_value, &str_val);
     ASSERT_JSON_SUCCESS("Get string from parsed name", error);
     ASSERT_EQUAL_STRING("Parsed name has correct value", "Test Object", str_val);
     
     bool bool_val;
     error = json_object_get(parsed, "active", &check_value);
     ASSERT_JSON_SUCCESS("Get active from parsed object", error);
-    error = json_get_bool(check_value, &bool_val);
+    error = json_bool_get(check_value, &bool_val);
     ASSERT_JSON_SUCCESS("Get bool from parsed active", error);
     ASSERT_EQUAL_INT("Parsed active has correct value", true, bool_val);
     

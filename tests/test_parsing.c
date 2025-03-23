@@ -27,7 +27,7 @@ void test_parsing() {
     ASSERT_JSON_SUCCESS("Parse true literal", error);
     
     bool bool_val;
-    error = json_get_bool(value, &bool_val);
+    error = json_bool_get(value, &bool_val);
     ASSERT_JSON_SUCCESS("Get bool from parsed true", error);
     ASSERT_EQUAL_INT("Parsed true has correct value", true, bool_val);
     json_free(value);
@@ -36,7 +36,7 @@ void test_parsing() {
     ASSERT_JSON_SUCCESS("Parse number", error);
     
     double num_val;
-    error = json_get_number(value, &num_val);
+    error = json_number_get(value, &num_val);
     ASSERT_JSON_SUCCESS("Get number from parsed value", error);
     ASSERT_EQUAL_DOUBLE("Parsed number has correct value", 42.5, num_val);
     json_free(value);
@@ -45,7 +45,7 @@ void test_parsing() {
     ASSERT_JSON_SUCCESS("Parse string", error);
     
     const char *str_val;
-    error = json_get_string(value, &str_val);
+    error = json_string_get(value, &str_val);
     ASSERT_JSON_SUCCESS("Get string from parsed value", error);
     ASSERT_EQUAL_STRING("Parsed string has correct value", "test string", str_val);
     json_free(value);
@@ -82,7 +82,7 @@ void test_parsing() {
     error = json_object_get(value, "name", &obj_value);
     ASSERT_JSON_SUCCESS("Get object property", error);
     
-    error = json_get_string(obj_value, &str_val);
+    error = json_string_get(obj_value, &str_val);
     ASSERT_JSON_SUCCESS("Get string from object property", error);
     ASSERT_EQUAL_STRING("Object property has correct value", "John", str_val);
     

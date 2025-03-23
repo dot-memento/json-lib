@@ -79,7 +79,7 @@ typedef struct json_error_info {
  * @brief Options for parsing JSON.
  */
 typedef struct json_parse_options {
-    json_error_info *error_info; /**< Optional pointer to error info for detailed errors */
+    json_error_info *error_info; /**< Optional pointer to error info for detailed errors (not allocated by the parser, has to be provided or NULL) */
     size_t max_depth;            /**< Maximum allowed nesting depth (default is 1000) */
 } json_parse_options;
 
@@ -152,13 +152,13 @@ json_error json_object_create(json_value **out);
  * @param[out] out Pointer to store the cloned JSON value.
  * @return json_error Status code.
  */
-json_error json_clone(const json_value *entry, json_value **out);
+json_error json_clone(const json_value *value, json_value **out);
 
 /**
  * @brief Frees the memory allocated for a JSON value.
  * @param entry JSON value to free.
  */
-void json_free(json_value *entry);
+void json_free(json_value *value);
 
 /**
  * @brief Returns the type of a JSON value.
@@ -166,7 +166,7 @@ void json_free(json_value *entry);
  * @param[out] out Pointer to store the JSON type.
  * @return json_error Status code.
  */
-json_error json_get_type(const json_value *entry, json_type *out);
+json_error json_get_type(const json_value *value, json_type *out);
 
 /**
  * @brief Gets the boolean value from a JSON boolean entry.
@@ -174,7 +174,7 @@ json_error json_get_type(const json_value *entry, json_type *out);
  * @param[out] out Pointer to store the boolean.
  * @return json_error Status code.
  */
-json_error json_get_bool(const json_value *entry, bool *out);
+json_error json_bool_get(const json_value *value, bool *out);
 
 /**
  * @brief Gets the numeric value from a JSON number entry.
@@ -182,7 +182,7 @@ json_error json_get_bool(const json_value *entry, bool *out);
  * @param[out] out Pointer to store the number.
  * @return json_error Status code.
  */
-json_error json_get_number(const json_value *entry, double *out);
+json_error json_number_get(const json_value *value, double *out);
 
 /**
  * @brief Gets the string from a JSON string entry.
@@ -190,14 +190,14 @@ json_error json_get_number(const json_value *entry, double *out);
  * @param[out] out Pointer to store the C-string.
  * @return json_error Status code.
  */
-json_error json_get_string(const json_value *entry, const char **out);
+json_error json_string_get(const json_value *value, const char **out);
 
 /**
  * @brief Changes a JSON value to null.
  * @param entry JSON value to change.
  * @return json_error Status code.
  */
-json_error json_change_to_null(json_value *entry);
+json_error json_set_as_null(json_value *value);
 
 /**
  * @brief Changes a JSON value to a boolean.
@@ -205,7 +205,7 @@ json_error json_change_to_null(json_value *entry);
  * @param value New boolean value.
  * @return json_error Status code.
  */
-json_error json_change_to_bool(json_value *entry, bool value);
+json_error json_set_as_bool(json_value *value, bool new_value);
 
 /**
  * @brief Changes a JSON value to a number.
@@ -213,7 +213,7 @@ json_error json_change_to_bool(json_value *entry, bool value);
  * @param value New numeric value.
  * @return json_error Status code.
  */
-json_error json_change_to_number(json_value *entry, double value);
+json_error json_set_as_number(json_value *value, double new_value);
 
 /**
  * @brief Changes a JSON value to a string (by copying).
@@ -221,7 +221,7 @@ json_error json_change_to_number(json_value *entry, double value);
  * @param string New C-string.
  * @return json_error Status code.
  */
-json_error json_change_to_string(json_value *entry, const char *string);
+json_error json_set_as_string(json_value *value, const char *new_value);
 
 /**
  * @brief Changes a JSON value to a string without copying.
@@ -229,21 +229,21 @@ json_error json_change_to_string(json_value *entry, const char *string);
  * @param string New C-string, which becomes owned by the json_entry.
  * @return json_error Status code.
  */
-json_error json_change_to_string_nocopy(json_value *entry, char *string);
-
-/**
- * @brief Changes a JSON value to an object.
- * @param entry JSON value to change.
- * @return json_error Status code.
- */
-json_error json_change_to_object(json_value *entry);
+json_error json_set_as_string_nocopy(json_value *value, char *new_value);
 
 /**
  * @brief Changes a JSON value to an array.
  * @param entry JSON value to change.
  * @return json_error Status code.
  */
-json_error json_change_to_array(json_value *entry);
+json_error json_set_as_array(json_value *value);
+
+/**
+ * @brief Changes a JSON value to an object.
+ * @param entry JSON value to change.
+ * @return json_error Status code.
+ */
+json_error json_set_as_object(json_value *value);
 
 /**
  * @brief Returns the length of a JSON array.
@@ -347,7 +347,7 @@ json_error json_object_remove(json_value *object, const char *key, json_value **
  * @brief Parses a JSON string.
  * @param string C-string containing the JSON input.
  * @param[out] value Pointer to store the parsed JSON value.
- * @param options Optional parsing options.
+ * @param options Optional parsing options (NULL for default values).
  * @return json_error Status code.
  */
 json_error json_parse_string(const char *string, json_value **value, const json_parse_options *options);
@@ -356,7 +356,7 @@ json_error json_parse_string(const char *string, json_value **value, const json_
  * @brief Parses JSON input from a file.
  * @param file File pointer containing the JSON input.
  * @param[out] value Pointer to store the parsed JSON value.
- * @param options Optional parsing options.
+ * @param options Optional parsing options (NULL for default values).
  * @return json_error Status code.
  */
 json_error json_parse_file(FILE *file, json_value **value, const json_parse_options *options);
@@ -365,19 +365,19 @@ json_error json_parse_file(FILE *file, json_value **value, const json_parse_opti
  * @brief Serializes a JSON value to a file.
  * @param entry JSON value to serialize.
  * @param file File pointer to write the JSON output.
- * @param options Optional formatting options.
+ * @param options Optional formatting options (NULL for default values).
  * @return json_error Status code.
  */
-json_error json_serialize_to_file(const json_value *entry, FILE *file, const json_format_options *options);
+json_error json_serialize_to_file(const json_value *value, FILE *file, const json_format_options *options);
 
 /**
  * @brief Serializes a JSON value to a string.
  * @param entry JSON value to serialize.
  * @param[out] dst Pointer to store the dynamically allocated JSON string.
- * @param options Optional formatting options.
+ * @param options Optional formatting options (NULL for default values).
  * @return json_error Status code.
  */
-json_error json_serialize_to_string(const json_value *entry, char **dst, const json_format_options *options);
+json_error json_serialize_to_string(const json_value *value, char **dst, const json_format_options *options);
 
 #ifdef __cplusplus
 }

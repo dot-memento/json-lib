@@ -29,7 +29,7 @@ void test_change_to_array()
     json_value *value;
     json_null_create(&value);
 
-    json_error error = json_change_to_array(value);
+    json_error error = json_set_as_array(value);
 
     ASSERT_JSON_SUCCESS("Change to array", error);
     ASSERT_JSON_TYPE("Array value has correct type", value, JSON_ARRAY);
@@ -167,7 +167,7 @@ void test_array_errors()
     json_error error = json_array_create(NULL);
     ASSERT_EQUAL_INT("Null output pointer causes error", JSON_ERROR_NULL, error);
 
-    error = json_change_to_array(NULL);
+    error = json_set_as_array(NULL);
     ASSERT_EQUAL_INT("Null output pointer causes error", JSON_ERROR_NULL, error);
     
     error = json_array_append(NULL, item);
@@ -232,7 +232,7 @@ void test_change_to_object()
     json_value *value;
     json_null_create(&value);
 
-    json_error error = json_change_to_object(value);
+    json_error error = json_set_as_object(value);
 
     ASSERT_JSON_SUCCESS("Change to object", error);
     ASSERT_JSON_TYPE("Object value has correct type", value, JSON_OBJECT);
@@ -349,7 +349,7 @@ void test_object_errors()
     json_error error = json_object_create(NULL);
     ASSERT_EQUAL_INT("Null output pointer causes error", JSON_ERROR_NULL, error);
 
-    error = json_change_to_object(NULL);
+    error = json_set_as_object(NULL);
     ASSERT_EQUAL_INT("Null output pointer causes error", JSON_ERROR_NULL, error);
     
     error = json_object_set(NULL, "key", item);
