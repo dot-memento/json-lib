@@ -72,6 +72,10 @@ json_free(root);
 
 Refer to [json.h](src/json.h) for full API documentation.
 
+## Testing
+
+Unit tests can all be compiled and run together by running `make test`.
+
 ## License
 
 [MIT License](LICENSE)
